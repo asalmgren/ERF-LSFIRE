@@ -559,26 +559,6 @@ public:
                               amrex::Real time);
 
 #ifdef ERF_USE_NETCDF
-    // Version in which we always set the velocity values but don't set theta
-    void fill_from_realbdy (const amrex::Vector<amrex::MultiFab*>& mfs,
-                            amrex::Real time,
-                            bool cons_only,
-                            int icomp_cons,
-                            int ncomp_cons,
-                            amrex::IntVect ngvect_cons,
-                            amrex::IntVect ngvect_vels);
-
-    // Version in which we only set the boundary value if inflowing, includes theta
-    void fill_from_realbdy_upwind (const amrex::Vector<amrex::MultiFab*>& mfs,
-                                   amrex::Real time,
-                                   bool cons_only,
-                                   int icomp_cons,
-                                   int ncomp_cons,
-                                   amrex::IntVect ngvect_cons,
-                                   amrex::IntVect ngvect_vels);
-#endif
-
-#ifdef ERF_USE_NETCDF
     void init_from_wrfinput (int lev,
                              amrex::MultiFab& mf_C1H,
                              amrex::MultiFab& mf_C2H,
@@ -1273,7 +1253,6 @@ private:
     // NetCDF initialization (wrfbdy/met_em) file
     static std::string nc_bdy_file;
     int real_width{0};
-    int real_set_width{0};
     bool real_extrap_w{true};
 
     // NetCDF initialization of zlo boundary values
