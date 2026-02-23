@@ -397,6 +397,15 @@ ERF::WriteCheckpointFile () const
 #endif
     } // for lev
 
+#ifdef ERF_USE_FIRE
+    // Write fire model state (phi level set)
+    if (solverChoice.fire_type != FireType::None) {
+        for (int lev = 0; lev <= finest_level; ++lev) {
+            fire_model.WriteCheckpointData(checkpointname, lev);
+        }
+    }
+#endif
+
 #ifdef ERF_USE_PARTICLES
    particleData.Checkpoint(checkpointname);
 #endif

@@ -226,10 +226,11 @@ function(build_erf_lib erf_lib_name)
   ########################### FIRE #################################
   if(ERF_ENABLE_FIRE)
     target_sources(${erf_lib_name} PRIVATE
-                   ${SRC_DIR}/FireModel/ERF_FireLevelSet.cpp
-                   ${SRC_DIR}/FireModel/ERF_FireLevelSet_Physics.cpp
-                   ${SRC_DIR}/FireModel/ERF_FireLevelSet_Fuel.cpp
-                   ${SRC_DIR}/FireModel/ERF_FireLevelSet_Numerics.cpp
+                   # Level-set fire model disabled - keeping only ELMFIRE
+                   # ${SRC_DIR}/FireModel/ERF_FireLevelSet.cpp
+                   # ${SRC_DIR}/FireModel/ERF_FireLevelSet_Physics.cpp
+                   # ${SRC_DIR}/FireModel/ERF_FireLevelSet_Fuel.cpp
+                   # ${SRC_DIR}/FireModel/ERF_FireLevelSet_Numerics.cpp
                    ${SRC_DIR}/FireModel/ERF_FireDataGatherer.cpp
                    ${SRC_DIR}/FireModel/ERF_FireELMFIRE.cpp
                    ${SRC_DIR}/FireModel/ERF_FireReadFuel.cpp
