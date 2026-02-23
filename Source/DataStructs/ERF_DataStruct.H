@@ -600,9 +600,6 @@ struct SolverChoice {
         // What's the strength of the bdy nudging?
         pp.query("bdy_nudge_factor",bdy_nudge_factor);
 
-        // Are me transporting the scalar component?
-        pp.query("transport_scalar",transport_scalar);
-
         // Are we using SHOC? (test on compilation done in turb struct)
         if (turbChoice[0].pbl_type == PBLType::SHOC) { use_shoc = true; }
 
