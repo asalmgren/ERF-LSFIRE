@@ -84,6 +84,10 @@ AMREX_ENUM(LandSurfaceType,
     SLM, MM5, None, NOAHMP
 );
 
+AMREX_ENUM(FireType,
+    None, LevelSet, CellularAutomata, ELMFIRE
+);
+
 AMREX_ENUM(RadiationType,
     None, RRTMGP
 );
@@ -223,6 +227,17 @@ struct SolverChoice {
         // What type of land surface model to use
         lsm_type = LandSurfaceType::None; // Default
         pp.query_enum_case_insensitive("land_surface_model",lsm_type);
+
+        // Fire model
+        fire_type = FireType::None; // Default
+        pp.query_enum_case_insensitive("fire_type", fire_type);
+        if (fire_type != FireType::None) {
+            fire_met_source = "Constant";  // Default
+            pp.query("fire_met_source", fire_met_source);
+            fire_heat_feedback = false; // Default
+            pp.query("fire_heat_feedback", fire_heat_feedback);
+        }
+        //   
 
         // What type of radiation model to use
         rad_type = RadiationType::None; // Default
@@ -945,6 +960,17 @@ struct SolverChoice {
         } else {
             amrex::Print() << "Radiation Model: None" << std::endl;
         }
+        
+        // Fire model
+        if (fire_type == FireType::LevelSet) {
+            amrex::Print() << "Fire Model: Level-Set" << std::endl;
+            amrex::Print() << "  Met source: " << fire_met_source << std::endl;
+        } else if (fire_type == FireType::CellularAutomata) {
+            amrex::Print() << "Fire Model: Cellular Automata" << std::endl;
+        } else {
+            amrex::Print() << "Fire Model: None" << std::endl;
+        }
+        // ========== END FIRE MODEL DISPLAY ==========
 
         amrex::Print() << "Gradp_type                  : " << gradp_type << std::endl;
 
@@ -1173,6 +1199,12 @@ struct SolverChoice {
     WindFarmLocType windfarm_loc_type;
     LandSurfaceType lsm_type;
     RadiationType rad_type;
+
+    // Fire model
+    FireType fire_type = FireType::None;
+    std::string fire_met_source = "Constant"; // "Constant" or "Atmospheric"
+    bool fire_heat_feedback = false; // Enable fire heat flux feedback to atmosphere
+    //
 
     ABLDriverType abl_driver_type;
     amrex::GpuArray<amrex::Real, AMREX_SPACEDIM> abl_pressure_grad;

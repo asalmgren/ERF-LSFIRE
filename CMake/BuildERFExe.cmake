@@ -223,6 +223,35 @@ function(build_erf_lib erf_lib_name)
     target_compile_definitions(${erf_lib_name} PUBLIC SCREAM_SHOC_SMALL_KERNELS)
   endif()
 
+  ########################### FIRE #################################
+  if(ERF_ENABLE_FIRE)
+    target_sources(${erf_lib_name} PRIVATE
+                   ${SRC_DIR}/FireModel/ERF_FireLevelSet.cpp
+                   ${SRC_DIR}/FireModel/ERF_FireLevelSet_Physics.cpp
+                   ${SRC_DIR}/FireModel/ERF_FireLevelSet_Fuel.cpp
+                   ${SRC_DIR}/FireModel/ERF_FireLevelSet_Numerics.cpp
+                   ${SRC_DIR}/FireModel/ERF_FireDataGatherer.cpp
+                   ${SRC_DIR}/FireModel/ERF_FireELMFIRE.cpp
+                   ${SRC_DIR}/FireModel/ERF_FireReadFuel.cpp
+                   ${SRC_DIR}/FireModel/ERF_FireReadIgnition.cpp)
+    target_include_directories(${erf_lib_name} PUBLIC
+                               $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/Source/FireModel>)
+    target_compile_definitions(${erf_lib_name} PUBLIC ERF_USE_FIRE)
+
+    # Link ELMFIRE library if available
+    set(ELMFIRE_DIR ${CMAKE_SOURCE_DIR}/../ELMFIRE_C/ELMFIRE-CPP_MPI CACHE PATH "Path to ELMFIRE-CPP_MPI")
+    if(EXISTS ${ELMFIRE_DIR}/include/ELMFIRE_API.H)
+      message(STATUS "Found ELMFIRE library at ${ELMFIRE_DIR}")
+      target_include_directories(${erf_lib_name} PUBLIC
+                                 $<BUILD_INTERFACE:${ELMFIRE_DIR}/include>)
+      target_link_libraries(${erf_lib_name} PUBLIC
+                           ${ELMFIRE_DIR}/build_mpi/libelmfire_core.a)
+    else()
+      message(WARNING "ELMFIRE library not found at ${ELMFIRE_DIR}. FireELMFIRE will not be available.")
+    endif()
+  endif()
+
+
   if(ERF_ENABLE_MORR_FORT)
   target_sources(${erf_lib_name}
      PRIVATE

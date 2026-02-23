@@ -12,6 +12,7 @@ read_from_metgrid (int lev, const Box& domain, const std::string& fname,
                    std::string& NC_dateTime, Real& NC_epochTime,
                    int& flag_psfc, int& flag_msf,
                    int& flag_sst,  int& flag_tsk, int& flag_lmask,
+                   int& flag_luindex, // add luindex flag for Fire model
                    int& NC_nx,     int& NC_ny,
                    Real& NC_dx,    Real& NC_dy,
                    FArrayBox& NC_xvel_fab, FArrayBox& NC_yvel_fab,
@@ -23,6 +24,7 @@ read_from_metgrid (int lev, const Box& domain, const std::string& fname,
                    FArrayBox& NC_sst_fab,  FArrayBox& NC_tsk_fab,
                    FArrayBox& NC_LAT_fab,  FArrayBox& NC_LON_fab,
                    IArrayBox& NC_lmask_iab,
+                   IArrayBox& NC_luindex_iab,  // add luindex IArrayBox for Fire model
                    Geometry& geom)
 {
     Print() << "Loading header data from NetCDF file at level " << lev << std::endl;
@@ -100,6 +102,7 @@ read_from_metgrid (int lev, const Box& domain, const std::string& fname,
     NC_fabs.push_back(&NC_tsk_fab);       NC_fnames.push_back("SKINTEMP");  NC_fdim_types.push_back(NC_Data_Dims_Type::Time_SN_WE);
 
     NC_iabs.push_back(&NC_lmask_iab);     NC_inames.push_back("LANDMASK");   NC_idim_types.push_back(NC_Data_Dims_Type::Time_SN_WE);
+    NC_iabs.push_back(&NC_luindex_iab);   NC_inames.push_back("LU_INDEX");   NC_idim_types.push_back(NC_Data_Dims_Type::Time_SN_WE);  // Fire model
 
     // Read the netcdf file and fill these FABs
     Print() << "Building initial FABS from file " << fname << std::endl;
@@ -118,6 +121,7 @@ read_from_metgrid (int lev, const Box& domain, const std::string& fname,
     BuildFABsFromNetCDFFile<IArrayBox,int>(domain, fname, NC_inames, NC_idim_types, NC_iabs, success_i);
     for (int i = 0; i < success_i.size(); i++) {
         if (NC_inames[i] == "LANDMASK" && success_i[i] == 1) {flag_lmask = 1;}
+        if (NC_inames[i] == "LU_INDEX" && success_i[i] == 1) {flag_luindex = 1;} // Fire model
     }
 
     // TODO: FIND OUT IF WE NEED TO DIVIDE VELS BY MAPFAC

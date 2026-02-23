@@ -180,6 +180,20 @@ ERF::setPlotVariables (const std::string& pp_plot_var_names, Vector<std::string>
     }
 #endif
 
+#ifdef ERF_USE_FIRE
+    // Fire model
+    if (solverChoice.fire_type != FireType::None) {
+        Vector<std::string> fire_plot_names;
+        fire_model.GetPlotVarNames(fire_plot_names);
+        // Append fire variable names to tmp_plot_names (NOT plot_var_names!)
+        for (const auto& name : fire_plot_names) {
+            if (!containerHasElement(tmp_plot_names, name)) {  // ← Changed from plot_var_names
+                tmp_plot_names.push_back(name);                 // ← Changed from plot_var_names
+            }
+        }
+    }
+#endif
+
     plot_var_names = tmp_plot_names;
 }
 
@@ -1540,6 +1554,47 @@ ERF::Write3DPlotFile (int which, PlotFileType plotfile_type, Vector<std::string>
             }
         }
 
+#ifdef ERF_USE_FIRE
+        // Fire model
+        if (solverChoice.fire_type != FireType::None) { 
+            Vector<std::string> fire_plot_names;
+            fire_model.GetPlotVarNames(fire_plot_names);
+
+            int num_vars = fire_plot_names.size();            
+
+            if (ParallelDescriptor::IOProcessor()) {
+                Print() << "\n=== Fire Plot Variables (Level " << lev << ") ===\n";
+                Print() << "  Variables to plot: " << num_vars << "\n";
+            }
+            
+            for (auto& plot_name : fire_plot_names) {
+                if (containerHasElement(plot_var_names, plot_name)) {
+                    // create temp MultiFab (3D)
+                    MultiFab temp_dat(mf[lev].boxArray(), mf[lev].DistributionMap(), 1, 0);
+                    temp_dat.setVal(0.0);
+                    
+                    // call GetPlotVar (internally checks is_active)
+                    fire_model.GetPlotVar(plot_name, temp_dat, lev);
+                    
+                    // Copy to output MultiFab
+                    MultiFab::Copy(mf[lev], temp_dat, 0, mf_comp, 1, 0);
+
+                    Real var_min = temp_dat.min(0);
+                    Real var_max = temp_dat.max(0); 
+
+                    if (ParallelDescriptor::IOProcessor()) {
+                        Print() << "    " << plot_name << ": [" << var_min << ", " << var_max << "]\n";
+                    }
+                    
+                    mf_comp += 1;
+                }
+            }
+            
+            if (ParallelDescriptor::IOProcessor()) {
+                Print() << "==============================\n\n";
+            }
+        }
+#endif        
 
     }
 

@@ -50,6 +50,7 @@ ERF::init_from_metgrid (int lev)
       sst_lev[lev].resize(ntimes);
       tsk_lev[lev].resize(ntimes);
     lmask_lev[lev].resize(ntimes);
+    luindex_lev[lev].resize(ntimes); // Fire model
 
     // *** FArrayBox's at this level for holding the metgrid data
     Vector<FArrayBox> NC_xvel_fab;   NC_xvel_fab.resize(ntimes);
@@ -70,6 +71,7 @@ ERF::init_from_metgrid (int lev)
 
     // *** IArrayBox's at this level for holding mask data
     Vector<IArrayBox> NC_lmask_iab; NC_lmask_iab.resize(ntimes);
+    Vector<IArrayBox> NC_luindex_iab; NC_luindex_iab.resize(ntimes);  // Fire model
 
     // *** Variables at this level for holding metgrid file global attributes
     Vector<int> flag_psfc;           flag_psfc.resize(   ntimes);
@@ -77,6 +79,7 @@ ERF::init_from_metgrid (int lev)
     Vector<int> flag_sst;            flag_sst.resize(    ntimes);
     Vector<int> flag_tsk;            flag_tsk.resize(    ntimes);
     Vector<int> flag_lmask;          flag_lmask.resize(  ntimes);
+    Vector<int> flag_luindex;        flag_luindex.resize(ntimes); // Fire model
     Vector<int> NC_nx;               NC_nx.resize(       ntimes);
     Vector<int> NC_ny;               NC_ny.resize(       ntimes);
     Vector<std::string> NC_dateTime; NC_dateTime.resize( ntimes);
@@ -109,13 +112,16 @@ ERF::init_from_metgrid (int lev)
                           NC_dateTime[itime],  NC_epochTime[itime],
                           flag_psfc[itime],    flag_msf[itime],
                           flag_sst[itime],     flag_tsk[itime],    flag_lmask[itime],
+                          flag_luindex[itime], // added flag_luindex for Fire model
                           NC_nx[itime],        NC_ny[itime],       NC_dx[itime],      NC_dy[itime],
                           NC_xvel_fab[itime],  NC_yvel_fab[itime],
                           NC_temp_fab[itime],  NC_rhum_fab[itime], NC_pres_fab[itime],
                           NC_ght_fab[itime],   NC_hgt_fab[itime],  NC_psfc_fab[itime],
                           NC_MSFU_fab[itime],  NC_MSFV_fab[itime], NC_MSFM_fab[itime],
                           NC_sst_fab[itime],   NC_tsk_fab[itime],  NC_LAT_fab[itime],  NC_LON_fab[itime],
-                          NC_lmask_iab[itime], geom[lev]);
+                          NC_lmask_iab[itime], 
+                          NC_luindex_iab[itime], // Fire model
+                          geom[lev]);
     } // itime
 
     // Verify that files in nc_init_file[lev] are ordered from earliest to latest.
@@ -231,6 +237,29 @@ ERF::init_from_metgrid (int lev)
             lmask_lev[lev][itime]->FillBoundary(geom[lev].periodicity());
         }
     }
+
+    // Fire model: LU_INDEX
+    if (flag_luindex[0]) {
+        for (int itime(0); itime < ntimes; ++itime) {
+            luindex_lev[lev][itime] = std::make_unique<iMultiFab>(ba2d[lev],dm,1,ngv);
+            for ( MFIter mfi(*(luindex_lev[lev][itime]), TilingIfNotGPU()); mfi.isValid(); ++mfi ) {
+                Box gtbx = mfi.growntilebox();
+                IArrayBox& dst = (*(luindex_lev[lev][itime]))[mfi];
+                IArrayBox& src = NC_luindex_iab[itime];
+                const Array4<      int>& dst_arr = dst.array();
+                const Array4<const int>& src_arr = src.const_array();
+                ParallelFor(gtbx, [=] AMREX_GPU_DEVICE (int i, int j, int) noexcept
+                {
+                    int li = min(max(i, i_lo), i_hi);
+                    int lj = min(max(j, j_lo), j_hi);
+                    dst_arr(i,j,0) = src_arr(li,lj,0);
+                });
+            }
+            luindex_lev[lev][itime]->FillBoundary(geom[lev].periodicity());
+        }
+    } else {
+        for (int itime(0); itime < ntimes; ++itime) luindex_lev[lev][itime] = nullptr;
+    }    
 
     solverChoice.has_lat_lon = true;
     lat_m[lev]    = std::make_unique<MultiFab>(ba2d[lev],dm,1,ngv);

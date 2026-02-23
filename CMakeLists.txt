@@ -135,6 +135,8 @@ if(ERF_ENABLE_ML_UPHYS_DIAGNOSTICS AND NOT ERF_ENABLE_PARTICLES)
   message(FATAL_ERROR "ERF_ENABLE_ML_UPHYS_DIAGNOSTICS requires particles be enabled")
 endif()
 option(ERF_ENABLE_SHOC "Enable SHOC" OFF)
+# Fire model
+option(ERF_ENABLE_FIRE "Enable fire spread model" OFF)
 
 #Options for performance
 option(ERF_ENABLE_MPI "Enable MPI" OFF)
@@ -608,6 +610,13 @@ if(ERF_ENABLE_SHOC)
 
   message(STATUS "SHOC configuration complete")
   list(POP_BACK CMAKE_MESSAGE_CONTEXT)
+endif()
+
+########################### FIRE #################################
+
+if(ERF_ENABLE_FIRE)
+    message(STATUS "ERF fire spread model enabled")
+    # Fire model source files are in Source/FireModel/
 endif()
 
 ########################### ERF #####################################

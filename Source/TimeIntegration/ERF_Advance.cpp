@@ -1,5 +1,6 @@
 #include <ERF.H>
 #include <ERF_Utils.H>
+#include <ERF_Constants.H>
 
 #ifdef ERF_USE_WINDFARM
 #include <ERF_WindFarm.H>
@@ -273,6 +274,179 @@ ERF::Advance (int lev, Real time, Real dt_lev, int iteration, int /*ncycle*/)
             check_state_for_nans(S_new);
         }
     }
+
+    // **************************************************************************************
+    // Update the fire model
+    // **************************************************************************************
+#ifdef ERF_USE_FIRE
+    if (solverChoice.fire_type != FireType::None) {     
+        // ✅ Prepare wind data for fire model
+        MultiFab* U_ptr = nullptr;
+        MultiFab* V_ptr = nullptr;
+        MultiFab* terrain_ptr = nullptr;
+        const iMultiFab* luindex_ptr = nullptr;
+        
+        if (solverChoice.fire_met_source == "Atmosphere") {
+            // Extract surface-level winds from 3D atmospheric data
+            const BoxArray& ba = S_new.boxArray();
+            const DistributionMapping& dm = S_new.DistributionMap();
+            
+            // Create 2D MultiFabs for surface winds (persistent static variables)
+            static std::unique_ptr<MultiFab> U_surface;
+            static std::unique_ptr<MultiFab> V_surface;
+            
+            // Reallocate if grid changed
+            if (!U_surface || U_surface->boxArray() != ba) {
+                BoxArray ba_2d(ba.size());
+                for (int i = 0; i < ba.size(); ++i) {
+                    Box bx = ba[i];
+                    bx.setSmall(2, 0);
+                    bx.setBig(2, 0);
+                    ba_2d.set(i, bx);
+                }
+                U_surface = std::make_unique<MultiFab>(ba_2d, dm, 1, 1);
+                V_surface = std::make_unique<MultiFab>(ba_2d, dm, 1, 1);
+            }
+            
+            // MPI DEBUG: About to extract surface wind
+            if (verbose > 0 && ParallelDescriptor::IOProcessor()) {
+                Print() << "Extracting surface wind from k=1 for fire model\n";
+            }
+
+            // Extract k=0 (surface level in terrain-following coords) and average to cell centers
+            for (MFIter mfi(*U_surface); mfi.isValid(); ++mfi) {
+                const Box& bx = mfi.validbox();
+                
+                const auto& u_3d = U_new.const_array(mfi);
+                const auto& v_3d = V_new.const_array(mfi);
+                
+                const auto& u_2d = U_surface->array(mfi);
+                const auto& v_2d = V_surface->array(mfi);
+                
+                // Extract k=1 (not k=0 which has NoSlipWall BC) and average from faces to cell centers
+                // k=1 is the first cell center above ground where velocity is non-zero
+                ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) {
+                    u_2d(i,j,0) = 0.5 * (u_3d(i,j,1) + u_3d(i+1,j,1));
+                    v_2d(i,j,0) = 0.5 * (v_3d(i,j,1) + v_3d(i,j+1,1));
+                });
+            }
+            
+            // Fill boundary for MPI ghost cells
+            U_surface->FillBoundary(geom[lev].periodicity());
+            V_surface->FillBoundary(geom[lev].periodicity());
+
+            U_ptr = U_surface.get();
+            V_ptr = V_surface.get();
+
+            // DEBUG: Print wind statistics being sent to fire model (first few timesteps, then every 30s)
+            static int debug_counter = 0;
+            if (verbose > 0) {
+                if (debug_counter < 5 || int(time) % 30 == 0) {
+                    // CRITICAL: min/max are collective MPI operations, ALL ranks must call them!
+                    Real u_min = U_surface->min(0);
+                    Real u_max = U_surface->max(0);
+                    Real v_min = V_surface->min(0);
+                    Real v_max = V_surface->max(0);
+
+                    // Only IO processor prints the results
+                    if (ParallelDescriptor::IOProcessor()) {
+                        Print() << "DEBUG WIND at t=" << time << " s (extracted at k=1 for fire):\n";
+                        Print() << "  U: min=" << u_min << ", max=" << u_max << " m/s\n";
+                        Print() << "  V: min=" << v_min << ", max=" << v_max << " m/s\n";
+                    }
+                    debug_counter++;
+                }
+            }
+        }
+        // If fire_met_source == "Constant", U_ptr and V_ptr remain nullptr
+
+        // Get terrain pointer
+        terrain_ptr = z_phys_cc[lev].get();
+        
+        // Get land use index pointer if available
+        if (lev < luindex_lev.size() && !luindex_lev[lev].empty() && luindex_lev[lev][0]) {
+            luindex_ptr = luindex_lev[lev][0].get();
+        }
+        
+        // Advance fire spread model
+        fire_model.Advance(lev, dt_lev, U_ptr, V_ptr, terrain_ptr, luindex_ptr);
+
+        // DEBUG: Print fire_heat_feedback status once
+        if (verbose > 0 && time < 1.0 && ParallelDescriptor::IOProcessor()) {
+            Print() << "DEBUG: fire_heat_feedback = " << (solverChoice.fire_heat_feedback ? "TRUE" : "FALSE") << "\n";
+        }
+
+        // Apply fire heat flux feedback to atmosphere if enabled
+        if (solverChoice.fire_heat_feedback) {
+            // DEBUG: Confirm we're entering this block
+            if (verbose > 0 && time < 1.0 && ParallelDescriptor::IOProcessor()) {
+                Print() << "DEBUG: ENTERING heat flux feedback block (this should NOT appear if fire_heat_feedback=false)\n";
+            }
+            // Get heat flux from fire and apply to atmospheric state
+            if (fire_heat_flux[lev]) {
+                fire_model.GetHeatFlux(lev, *fire_heat_flux[lev]);
+                
+                // Apply fire heat flux to lowest atmospheric level
+                // This couples the fire model back to the atmosphere
+                for (MFIter mfi(S_new, TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+                    const Box& bx = mfi.tilebox();
+                    const auto& cons_arr = S_new.array(mfi);
+                    const auto& heat_arr = fire_heat_flux[lev]->const_array(mfi);
+                    
+                    // ✅ SIMPLEST FIX: Just get the value directly
+                    Real dz = geom[lev].CellSize(2);
+                    
+                    // Convert heat flux (W/m²) to source term for RhoTheta
+                    // Use Cp_d from ERF_Constants.H (1004.5 J/(kg·K))
+                    ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) {
+                        if (k == 0) {  // Only apply at surface
+                            // Q_fire [W/m²] * dt [s] / (Cp_d * dz) -> temperature change
+                            Real heat_source = heat_arr(i,j,0) * dt_lev / (Cp_d * dz);
+                            cons_arr(i,j,k,RhoTheta_comp) += heat_source;
+                        }
+                    });
+                }
+            }
+
+            // Apply moisture flux (latent heat) to water vapor mixing ratio
+            // Only if moisture_flux MultiFab is allocated
+            if (fire_moisture_flux[lev]) {
+                fire_model.GetMoistureFlux(lev, *fire_moisture_flux[lev]);
+
+                for (MFIter mfi(S_new, TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+                    const Box& bx = mfi.tilebox();
+                    const auto& cons_arr = S_new.array(mfi);
+                    const auto& moist_arr = fire_moisture_flux[lev]->const_array(mfi);
+                    
+                    Real dz = geom[lev].CellSize(2);
+
+                    // Apply moisture flux as source term to RhoQ (water vapor density)
+                    // Moisture flux [kg/m²/s] -> source [kg/m³/s]
+                    // RhoQ += (moisture_flux / dz) * dt
+                    ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
+                        if (k == 0) {  // Only apply at surface
+                            // Convert moisture flux to water vapor density tendency
+                            // moist_arr is in kg/m²/s, dz is cell height
+                            Real moisture_source = moist_arr(i,j,0) * dt_lev / dz;
+                            cons_arr(i,j,k,RhoQ1_comp) += moisture_source;
+                        }
+                    });
+                }
+            }
+        }
+        
+        if (verbose > 1) {
+            Real fire_area = fire_model.get_fire_area(lev);
+            Real max_heat = fire_heat_flux[lev] ? fire_heat_flux[lev]->max(0) : 0.0;
+            Real max_moisture = fire_moisture_flux[lev] ? fire_moisture_flux[lev]->max(0) : 0.0;
+            amrex::Print() << "  Fire at t=" << time+dt_lev 
+                          << ": area=" << fire_area << " m²"
+                          << ", max_heat=" << max_heat << " W/m²"
+                          << ", max_moisture=" << max_moisture << " kg/m²/s\n";
+        }
+    }
+#endif
+    // ========== END FIRE MODEL ADVANCE ==========
 
     // **************************************************************************************
     // Update the land surface model

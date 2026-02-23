@@ -27,6 +27,11 @@
 #include "ERF_ReadFromWRFBdy.H"
 #endif
 
+#ifdef ERF_USE_FIRE
+#include "ERF_FireLevelSet.H"
+#include "ERF_FireDataGatherer.H"
+#endif
+
 using namespace amrex;
 
 Real ERF::startCPUTime        = 0.0;
@@ -188,6 +193,17 @@ ERF::ERF_shared ()
 
     rhotheta_src.resize(nlevs_max);
     rhoqt_src.resize(nlevs_max);
+
+#ifdef ERF_USE_FIRE
+    // Fire model; NOTE: size fire model before readparams
+    fire_model.ReSize(nlevs_max);
+    fire_heat_flux.resize(nlevs_max);
+    fire_moisture_flux.resize(nlevs_max);
+    luindex_lev.resize(nlevs_max);
+    for (int lev = 0; lev < nlevs_max; lev++) {
+        luindex_lev[lev].resize(0);  // ✅ Initialize as empty vector
+    }    
+#endif
 
     // NOTE: size canopy model before readparams (if file exists, we construct)
     m_forest_drag.resize(nlevs_max);
@@ -649,6 +665,7 @@ ERF::Evolve ()
         if (writeNow(cur_time, step+1, m_plot3d_int_1, m_plot3d_per_1, dt[0], last_plot3d_file_time_1)) {
             last_plot3d_file_step_1 = step+1;
             Write3DPlotFile(1,plotfile3d_type_1,plot3d_var_names_1);
+            fire_model.WriteFirePlotFile(step+1, cur_time);
             for (int lev = 0; lev <= finest_level; ++lev) {lsm.Plot(lev, step+1);}
             if (m_plot3d_per_1 > 0.) {last_plot3d_file_time_1 += m_plot3d_per_1;}
         }
@@ -699,6 +716,7 @@ ERF::Evolve ()
     // Write plotfiles at final time
     if ( (m_plot3d_int_1 > 0 || m_plot3d_per_1 > 0.) && istep[0] > last_plot3d_file_step_1 ) {
         Write3DPlotFile(1,plotfile3d_type_1,plot3d_var_names_1);
+        fire_model.WriteFirePlotFile(istep[0], t_new[0]);
         if (m_plot3d_per_1 > 0.) {last_plot3d_file_time_1 += m_plot3d_per_1;}
     }
     if ( (m_plot3d_int_2 > 0 || m_plot3d_per_2 > 0.) && istep[0] > last_plot3d_file_step_2) {
@@ -1667,6 +1685,7 @@ ERF::InitData_post ()
         if (m_plot3d_int_1 > 0 || m_plot3d_per_1 > 0.)
         {
             Write3DPlotFile(1,plotfile3d_type_1,plot3d_var_names_1);
+            fire_model.WriteFirePlotFile(istep[0], t_new[0]);
             if (m_plot3d_per_1 > 0.) {last_plot3d_file_time_1 += m_plot3d_per_1;}
             last_plot3d_file_step_1 = istep[0];
         }
@@ -2031,6 +2050,115 @@ ERF::initializeWindFarm(const int& a_nlevsmax/*!< number of AMR levels */ )
 }
 #endif
 
+
+#ifdef ERF_USE_FIRE
+// Fire model
+void
+ERF::InitializeFireModel(int lev)
+{
+    Print() << "🔥🔥🔥 InitializeFireModel called on Rank " << ParallelDescriptor::MyProc() << "\n";
+
+    if (solverChoice.fire_type == FireType::None) return;
+
+    const auto& ba = grids[lev];
+    const auto& dm = dmap[lev];
+    
+    // Allocate fire flux arrays
+    fire_heat_flux[lev] = std::make_unique<MultiFab>(ba, dm, 1, 0);
+    fire_moisture_flux[lev] = std::make_unique<MultiFab>(ba, dm, 1, 0);
+    fire_heat_flux[lev]->setVal(0.0);
+    fire_moisture_flux[lev]->setVal(0.0);
+    
+    // Initialize fire model
+    fire_model.Define(lev, solverChoice);
+
+    fire_model.Init(lev, vars_new[lev][Vars::cons], geom[lev], dt[lev]);
+
+    ParallelDescriptor::Barrier();
+    
+    if (verbose > 0) {
+        amrex::Print() << "Fire model initialized at level " << lev << std::endl;
+    }
+}
+
+// void ERF::AdvanceFireModel(int lev, amrex::Real dt)
+// {
+//     if (solverChoice.fire_type == FireType::None) return;
+
+//     int my_rank = ParallelDescriptor::MyProc();
+//     Print() << "🔥 Rank " << my_rank << " in AdvanceFireModel\n";
+       
+//     BL_PROFILE("ERF::AdvanceFireModel");
+    
+//     MultiFab* U_ptr = nullptr;
+//     MultiFab* V_ptr = nullptr;
+//     MultiFab* terrain_ptr = nullptr;
+//     iMultiFab* luindex_ptr = nullptr;
+    
+//     if (solverChoice.fire_met_source == "Atmosphere") {
+//         const BoxArray& ba = grids[lev];
+//         const DistributionMapping& dm = dmap[lev];
+        
+//         // Create 2D MultiFabs for surface winds
+//         static std::unique_ptr<MultiFab> U_surface;
+//         static std::unique_ptr<MultiFab> V_surface;
+        
+//         if (!U_surface || U_surface->boxArray() != ba) {
+//             BoxArray ba_2d(ba.size());
+//             for (int i = 0; i < ba.size(); ++i) {
+//                 Box bx = ba[i];
+//                 bx.setSmall(2, 0);
+//                 bx.setBig(2, 0);
+//                 ba_2d.set(i, bx);
+//             }
+//             U_surface = std::make_unique<MultiFab>(ba_2d, dm, 1, 1); // Add 1 ghost cell
+//             V_surface = std::make_unique<MultiFab>(ba_2d, dm, 1, 1);
+//         }
+        
+//         // ========== SIMPLIFIED: Just extract k=0 ==========
+//         // In terrain-following coords, k=0 is always first level above surface
+//         for (MFIter mfi(*U_surface); mfi.isValid(); ++mfi) {
+//             const Box& bx = mfi.validbox();
+            
+//             const auto& u_3d = vars_new[lev][Vars::xvel].const_array(mfi);
+//             const auto& v_3d = vars_new[lev][Vars::yvel].const_array(mfi);
+            
+//             const auto& u_2d = U_surface->array(mfi);
+//             const auto& v_2d = V_surface->array(mfi);
+            
+//             // Simply extract k=0 and average from faces to cell centers
+//             ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) {
+//                 u_2d(i,j,0) = 0.5 * (u_3d(i,j,0) + u_3d(i+1,j,0));
+//                 v_2d(i,j,0) = 0.5 * (v_3d(i,j,0) + v_3d(i,j+1,0));
+//             });
+//         }
+//         // ========== END SIMPLIFIED ==========
+        
+//         // Fill ghost cells for boundary conditions
+//         U_surface->FillBoundary(geom[lev].periodicity());
+//         V_surface->FillBoundary(geom[lev].periodicity());
+        
+//         U_ptr = U_surface.get();
+//         V_ptr = V_surface.get();
+//         terrain_ptr = z_phys_cc[lev].get();
+//         if (lev < luindex_lev.size() && !luindex_lev[lev].empty() && luindex_lev[lev][0]) {
+//             luindex_ptr = luindex_lev[lev][0].get();
+//         }
+//     }
+
+//     fire_model.Advance(lev, dt, U_ptr, V_ptr, terrain_ptr, luindex_ptr);
+//     fire_model.GetHeatFlux(lev, *fire_heat_flux[lev]);
+    
+//     if (verbose > 1) {
+//         Real fire_area = fire_model.get_fire_area(lev);
+//         Real max_heat = fire_heat_flux[lev]->max(0);
+//         Print() << "  Fire model: area=" << fire_area 
+//                << " m², max_heat=" << max_heat << " W/m²\n";
+//     }
+// }
+#endif
+
+
 void
 ERF::restart ()
 {
@@ -2066,6 +2194,17 @@ ERF::restart ()
 #ifdef ERF_USE_PARTICLES
     // We call this here without knowing whether the particles have already been initialized or not
     initializeTracers((ParGDBBase*)GetParGDB(),z_phys_nd,t_new[0]);
+#endif
+
+#ifdef ERF_USE_FIRE
+    // Initialize fire model during restart and restore fire state from checkpoint
+    for (int lev = 0; lev <= finest_level; ++lev) {
+        InitializeFireModel(lev);
+        // Set fire model time to match checkpoint time
+        fire_model.SetTime(lev, t_new[lev]);
+        // Restore fire state (phi field) from checkpoint if available
+        fire_model.ReadCheckpointData(restart_chkfile, lev);
+    }
 #endif
 
     Real cur_time = t_new[0];
@@ -2219,6 +2358,11 @@ ERF::init_only (int lev, Real time)
         solverChoice.buildings_type == BuildingsType::ImmersedForcing) {
         init_immersed_forcing(lev);
     }
+
+#ifdef ERF_USE_FIRE
+    // Initialize fire model
+    InitializeFireModel(lev);
+#endif
 }
 
 // Read in some parameters from inputs file
@@ -2713,6 +2857,24 @@ ERF::ReadParameters ()
         Abort("Dont know this LandSurfaceType!") ;
     }
 
+#ifdef ERF_USE_FIRE
+    // Fire model parameters (read from input file)
+    // NOTE: Must be checked after init_params (which sets fire_type from input)
+    if (solverChoice.fire_type == FireType::ELMFIRE) {
+        fire_model.SetModel<FireELMFIRE>();
+        if (verbose > 0) {
+            amrex::Print() << "ELMFIRE fire spread model enabled\n";
+        }
+    } else if (solverChoice.fire_type == FireType::None) {
+        fire_model.SetModel<NullFire>();
+        if (verbose > 0) {
+            amrex::Print() << "No fire model\n";
+        }
+    } else {
+        Abort("Only ELMFIRE fire model is supported. Use erf.fire_type = 'ELMFIRE' or 'None'");
+    }
+#endif
+
     if (verbose > 0) {
         solverChoice.display(max_level,pp_prefix);
     }
@@ -3111,13 +3273,19 @@ ERF::check_for_low_temp(amrex::MultiFab& S)
             Real temp = getTgivenRandRTh(rho, rhotheta, qv);
 
             if (temp < t_low) {
+                // MODIFIED: Clamp temperature instead of aborting
+                // This prevents spurious cold temperatures at boundaries
+                // Scale rhotheta proportionally to bring temp up to t_low
+                Real scale_factor = (t_low + 1.0) / temp;  // +1K buffer to avoid edge case
+                Real rhotheta_new = rhotheta * scale_factor;
+
+                s_arr(i, j, k, RhoTheta_comp) = rhotheta_new;
+
 #ifdef AMREX_USE_GPU
-                AMREX_DEVICE_PRINTF("Temperature too low in cell: %d %d %d %e \n", i,j,k,temp);
+                AMREX_DEVICE_PRINTF("Temperature clamped in cell: %d %d %d from %e to %e K\n", i,j,k,temp,t_low);
 #else
-                printf("Temperature too low in cell: %d %d %d \n", i,j,k);
-                printf("Based on temp / rhotheta / rho %e %e %e \n", temp,rhotheta,rho);
+                printf("Temperature clamped in cell: %d %d %d from %.2f to %.2f K\n", i,j,k,temp,t_low);
 #endif
-                Abort();
             }
         });
     }

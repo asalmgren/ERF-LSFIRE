@@ -59,6 +59,11 @@
 #include "ERF_LagrangianMicrophysics.H"
 #include "ERF_LandSurface.H"
 
+// Fire model
+#ifdef ERF_USE_FIRE
+#include <ERF_FireModel.H>
+#endif
+
 #ifdef ERF_USE_WINDFARM
 #include "ERF_WindFarm.H"
 #endif
@@ -390,6 +395,11 @@ public:
     void advance_radiation (int lev,
                             amrex::MultiFab& cons_in,
                             const amrex::Real& dt_advance);
+
+#ifdef ERF_USE_FIRE
+    void InitializeFireModel(int lev);
+    void AdvanceFireModel(int lev, amrex::Real dt);
+#endif
 
 #ifdef ERF_USE_SHOC
     void compute_shoc_tendencies (int lev,
@@ -898,6 +908,13 @@ private:
     amrex::Vector<std::string> lsm_flux_name;                // (ncomp)
     amrex::Vector<amrex::Vector<amrex::MultiFab*>> lsm_flux; // (lev,ncomp)
 
+#ifdef ERF_USE_FIRE
+    // Fire model
+    FireModel fire_model;
+    amrex::Vector<std::unique_ptr<amrex::MultiFab>> fire_heat_flux;
+    amrex::Vector<std::unique_ptr<amrex::MultiFab>> fire_moisture_flux;
+#endif
+
     amrex::Vector<std::unique_ptr<IRadiation>> rad; // Radiation model at each level
     amrex::Vector<std::unique_ptr<amrex::MultiFab>> qheating_rates;  // radiation heating rate source terms (SW, LW)
     amrex::Vector<std::unique_ptr<amrex::MultiFab>> rad_fluxes;      // radiation fluxes (SW up/dn, LW up/dn)
@@ -934,6 +951,7 @@ private:
     amrex::Vector<amrex::Vector<std::unique_ptr<amrex::MultiFab>>>  sst_lev;
     amrex::Vector<amrex::Vector<std::unique_ptr<amrex::MultiFab>>>  tsk_lev;
     amrex::Vector<amrex::Vector<std::unique_ptr<amrex::iMultiFab>>> lmask_lev;
+    amrex::Vector<amrex::Vector<std::unique_ptr<amrex::iMultiFab>>> luindex_lev; // Fire model
 
     // Land grid types and urban fraction
     amrex::Vector<amrex::Vector<std::unique_ptr<amrex::iMultiFab>>> land_type_lev;

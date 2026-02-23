@@ -18,6 +18,7 @@ read_from_metgrid (int lev,
                    int& flag_sst,
                    int& flag_tsk,
                    int& flag_lmask,
+                   int& flag_luindex, // Fire model
                    int& NC_nx,
                    int& NC_ny,
                    amrex::Real& NC_dx,
@@ -38,6 +39,7 @@ read_from_metgrid (int lev,
                    amrex::FArrayBox& NC_LAT_fab,
                    amrex::FArrayBox& NC_LON_fab,
                    amrex::IArrayBox& NC_lmask_iab,
+                   amrex::IArrayBox& NC_luindex_iab, // Fire model
                    amrex::Geometry& geom);
 
 void

@@ -50,6 +50,12 @@ else ()
   add_subdirectory(DevTests/TropicalCyclone)
   add_subdirectory(DevTests/Tornado)
   add_subdirectory(DevTests/sinusoidal_mass_flux)
+  if(ERF_ENABLE_FIRE)
+    # Level-set fire model (FireTest) disabled - keeping only ELMFIRE
+    # add_subdirectory(FireTest)
+    add_subdirectory(FireTest_ELMFIRE_Constant)
+    add_subdirectory(FireTest_ELMFIRE_Coupled)
+  endif()
 endif()
 
 if(ERF_ENABLE_TOOLS)
