@@ -185,10 +185,12 @@ ERF::setPlotVariables (const std::string& pp_plot_var_names, Vector<std::string>
     if (solverChoice.fire_type != FireType::None) {
         Vector<std::string> fire_plot_names;
         fire_model.GetPlotVarNames(fire_plot_names);
-        // Append fire variable names to tmp_plot_names (NOT plot_var_names!)
+        // Only add fire variables that the user explicitly requested in plot_vars_N.
+        // Fire variables at fine resolution are written separately via WriteFirePlotFile.
         for (const auto& name : fire_plot_names) {
-            if (!containerHasElement(tmp_plot_names, name)) {  // ← Changed from plot_var_names
-                tmp_plot_names.push_back(name);                 // ← Changed from plot_var_names
+            if (containerHasElement(plot_var_names, name) &&
+                !containerHasElement(tmp_plot_names, name)) {
+                tmp_plot_names.push_back(name);
             }
         }
     }

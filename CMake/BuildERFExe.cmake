@@ -243,10 +243,22 @@ function(build_erf_lib erf_lib_name)
     set(ELMFIRE_DIR ${CMAKE_SOURCE_DIR}/../ELMFIRE_C/ELMFIRE-CPP_MPI CACHE PATH "Path to ELMFIRE-CPP_MPI")
     if(EXISTS ${ELMFIRE_DIR}/include/ELMFIRE_API.H)
       message(STATUS "Found ELMFIRE library at ${ELMFIRE_DIR}")
+
+      # Use AMR-enabled ELMFIRE build for coupled runs (build_amr only).
+      set(ELMFIRE_LIB_PATH "${ELMFIRE_DIR}/build_amr/libelmfire_core.a" CACHE FILEPATH
+          "Path to libelmfire_core.a used by ERF fire coupling")
+
+      if(NOT EXISTS "${ELMFIRE_LIB_PATH}")
+        message(FATAL_ERROR
+          "ELMFIRE library not found at ${ELMFIRE_LIB_PATH}. "
+          "Set -DELMFIRE_LIB_PATH=/path/to/libelmfire_core.a")
+      endif()
+      message(STATUS "Using ELMFIRE library: ${ELMFIRE_LIB_PATH}")
+
       target_include_directories(${erf_lib_name} PUBLIC
                                  $<BUILD_INTERFACE:${ELMFIRE_DIR}/include>)
       target_link_libraries(${erf_lib_name} PUBLIC
-                           ${ELMFIRE_DIR}/build_mpi/libelmfire_core.a)
+                           ${ELMFIRE_LIB_PATH})
     else()
       message(WARNING "ELMFIRE library not found at ${ELMFIRE_DIR}. FireELMFIRE will not be available.")
     endif()

@@ -1,0 +1,22 @@
+# Main algorithm: initialization, data management, I/O
+CEXE_sources += ERF_FireLevelSet.cpp
+
+# Fire physics: Rothermel model, elliptical spread
+CEXE_sources += ERF_FireLevelSet_Physics.cpp
+
+# Fuel model database and tables
+CEXE_sources += ERF_FireLevelSet_Fuel.cpp
+
+# Numerical methods: level-set integration, gradients, CFL
+CEXE_sources += ERF_FireLevelSet_Numerics.cpp
+
+CEXE_sources += ERF_FireDataGatherer.cpp
+
+# Headers
+CEXE_headers += ERF_NullFire.H
+CEXE_headers += ERF_FireLevelSet.H
+CEXE_headers += ERF_FireModel.H
+CEXE_headers += ERF_FireDataGatherer.H
+
+INCLUDE_LOCATIONS += $(ERF_HOME)/Source/FireModel
+VPATH_LOCATIONS   += $(ERF_HOME)/Source/FireModel

@@ -1,0 +1,126 @@
+# ====================================
+# ELMFIRE Fire Test Case - Atmospheric Coupling
+# ====================================
+# This test case demonstrates ELMFIRE fire spread with atmospheric coupling
+# (wind from ERF atmosphere, heat/moisture feedback to atmosphere)
+#
+# NOTE: This requires Phase 4 implementation (atmospheric coupling in ELMFIRE library)
+
+# ------ PROBLEM SETUP ------
+erf.init_type = "uniform"
+
+# ------ DOMAIN ------
+# 3 km x 3 km horizontal domain with 30 m resolution
+geometry.prob_extent = 3000.0  3000.0  2000.0
+geometry.is_periodic = 1 1 0
+
+# 100 x 100 horizontal cells, 64 vertical cells
+amr.n_cell = 100 100 64
+amr.max_level = 0
+
+# ------ BOUNDARY CONDITIONS ------
+# For periodic directions (x,y): DO NOT specify BC types
+# Only specify z-direction BCs
+zlo.type = "NoSlipWall"
+zhi.type = "SlipWall"
+
+# ------ TIME STEPPING ------
+# Run for 1 hour (3600 s) of fire spread with atmosphere
+max_step = 100000
+stop_time = 3600.0
+erf.fixed_dt = 1.0
+erf.cfl = 0.9
+
+# ------ PHYSICS ------
+erf.use_gravity = true
+erf.use_coriolis = false
+erf.moisture_model = "None"
+
+# ------ TURBULENCE ------
+erf.les_type = "None"           # No LES turbulence (steady wind for fire)
+erf.molec_diff_type = "Constant"
+erf.rho0_trans = 1.0
+
+# Smagorinsky parameters (not used with les_type = None)
+# erf.Cs = 0.17
+# erf.Pr_t = 0.33
+
+# ------ FIRE MODEL ------
+# Select ELMFIRE fire spread model
+erf.fire_type = "ELMFIRE"
+
+# Tell ERF to extract atmospheric wind and pass to fire model
+erf.fire_met_source = "Atmosphere"
+
+# Fire-atmosphere coupling options
+erf.fire_heat_feedback = false  # Enable/disable fire heat flux feedback to atmosphere
+
+# ELMFIRE configuration
+fire.mode = "atmospheric"       # Atmospheric coupling mode
+fire.verbosity = 1
+
+# Fuel model (102 = GR2 moderate grass)
+fire.uniform_fuel_id = 102
+fire.fuel_database_path = "fuel_models.csv"
+
+# Fuel moisture content (fraction)
+fire.fuel_moisture_1hr = 0.03         # 3% for 1-hour fuels
+fire.fuel_moisture_10hr = 0.03        # 3% for 10-hour fuels
+fire.fuel_moisture_100hr = 0.03       # 3% for 100-hour fuels
+fire.fuel_moisture_live_herb = 0.30   # 30% for live herbaceous
+fire.fuel_moisture_live_woody = 0.60  # 60% for live woody
+
+# Terrain slope (uniform, flat terrain)
+fire.uniform_slope_x = 0.0
+fire.uniform_slope_y = 0.0
+
+# Ignition parameters
+fire.ignition_x = 1500.0       # m (center of domain)
+fire.ignition_y = 1500.0       # m (center of domain)
+fire.ignition_radius = 50.0    # m (50 m radius circle)
+fire.ignition_time = 600.0     # s (ignite after atmosphere spins up)
+
+# Numerical parameters
+fire.cfl = 0.9
+fire.band_thickness = 5        # cells in narrow band
+
+# ------ OUTPUT ------
+erf.plot_file_1 = plt
+erf.plot_int_1 = 30            # Output every 30 seconds
+
+# Plot variables (include both atmosphere and fire)
+erf.plot_vars_1 = density x_velocity y_velocity z_velocity temp theta \
+                  fire_phi fire_heat_flux fire_vel_u fire_vel_v fire_tagged
+
+erf.check_file = chk
+erf.check_int = 600            # Checkpoint every 10 minutes
+
+# ------ VERBOSITY ------
+erf.v = 1
+amrex.v = 0
+
+# ------ INITIAL CONDITIONS ------
+# Uniform atmosphere with horizontal wind shear
+prob.rho_0 = 1.2               # kg/m³
+prob.T_0 = 300.0               # K
+
+# Initial wind profile (will be perturbed by fire)
+prob.U_0 = 5.0                 # m/s (initial eastward wind)
+prob.V_0 = 0.0                 # m/s
+prob.W_0 = 0.0                 # m/s
+
+# ------ ATMOSPHERIC COUPLING NOTES ------
+# In atmospheric coupling mode:
+# 1. ELMFIRE extracts surface wind (U, V at k=1) from ERF MultiFabs
+# 2. Wind is scaled using logarithmic profile: z=31.25m -> 20-ft -> midflame
+# 3. Fire spread responds to atmospheric wind (variable in space/time)
+# 4. ELMFIRE computes heat flux and returns to ERF
+# 5. If erf.fire_heat_feedback = true, ERF applies fire heat flux as surface BC
+#
+# TURBULENCE SETTINGS:
+# - erf.les_type = "None": Provides steady constant wind (recommended for testing)
+# - erf.les_type = "Smagorinsky": Enables LES turbulence (variable wind in space/time)
+#
+# HEAT FEEDBACK:
+# - erf.fire_heat_feedback = false: Fire does NOT affect atmosphere (one-way coupling)
+# - erf.fire_heat_feedback = true: Fire heat flux modifies atmospheric temperature
