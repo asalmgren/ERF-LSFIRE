@@ -536,21 +536,21 @@ public:
                 // *******************************************************************
                 // NOTE: this format is contiguous in y to match the AMR-Wind read
                 // *******************************************************************
-                ind11 =           iindex_terrain         * ny + jindex_terrain;                   // (x1,y1)
-                ind21 =  std::min(iindex_terrain+1,nx-1) * ny + jindex_terrain;                   // (x2,y1)
+                ind11 =              iindex_terrain          * ny + jindex_terrain;                   // (x1,y1)
+                ind21 =  amrex::min(iindex_terrain+1,nx-1) * ny + jindex_terrain;                   // (x2,y1)
 
-                ind12 =           iindex_terrain         * ny + std::min(jindex_terrain+1,ny-1);  // (x1,y2)
-                ind22  = std::min(iindex_terrain+1,nx-1) * ny + std::min(jindex_terrain+1,ny-1);  // (x1,y2)
+                ind12 =              iindex_terrain          * ny + amrex::min(jindex_terrain+1,ny-1);  // (x1,y2)
+                ind22  = amrex::min(iindex_terrain+1,nx-1) * ny + amrex::min(jindex_terrain+1,ny-1);  // (x1,y2)
 #else
                 // *******************************************************************
                 // NOTE: this format is contiguous in x as an alternative
                 // *******************************************************************
 
-                ind11 =           jindex_terrain         * nx + iindex_terrain;                   // (x1,y1)
-                ind12 =  std::min(jindex_terrain+1,ny-1) * nx + iindex_terrain;                   // (x1,y2)
+                ind11 =              jindex_terrain          * nx + iindex_terrain;                   // (x1,y1)
+                ind12 =  amrex::min(jindex_terrain+1,ny-1) * nx + iindex_terrain;                   // (x1,y2)
 
-                ind21 =           jindex_terrain         * nx + std::min(iindex_terrain+1,nx-1);  // (x2,y1)
-                ind22  = std::min(jindex_terrain+1,ny-1) * nx + std::min(iindex_terrain+1,nx-1);  // (x2,y2)
+                ind21 =              jindex_terrain          * nx + amrex::min(iindex_terrain+1,nx-1);  // (x2,y1)
+                ind22  = amrex::min(jindex_terrain+1,ny-1) * nx + amrex::min(iindex_terrain+1,nx-1);  // (x2,y2)
 #endif
 
                 if (iindex_terrain == nx-1 && jindex_terrain == ny-1)

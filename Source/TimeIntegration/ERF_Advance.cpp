@@ -2,6 +2,53 @@
 #include <ERF_Utils.H>
 #include <ERF_Constants.H>
 
+// nvcc forbids __device__ lambdas inside private member functions (ERF::Advance is private).
+// These static helpers host the ParallelFor kernels so the private method is not the
+// enclosing function of any __device__ lambda.
+
+static void LaunchExtractSurfaceWindKernel(
+    const amrex::Box& bx,
+    const amrex::Array4<const amrex::Real>& u_3d,
+    const amrex::Array4<const amrex::Real>& v_3d,
+    const amrex::Array4<amrex::Real>& u_2d,
+    const amrex::Array4<amrex::Real>& v_2d)
+{
+    amrex::ParallelFor(bx, [u_3d, v_3d, u_2d, v_2d] AMREX_GPU_DEVICE (int i, int j, int) noexcept {
+        u_2d(i,j,0) = 0.5 * (u_3d(i,j,1) + u_3d(i+1,j,1));
+        v_2d(i,j,0) = 0.5 * (v_3d(i,j,1) + v_3d(i,j+1,1));
+    });
+}
+
+static void LaunchApplyHeatFluxKernel(
+    const amrex::Box& bx,
+    const amrex::Array4<amrex::Real>& cons_arr,
+    const amrex::Array4<const amrex::Real>& heat_arr,
+    amrex::Real dt_lev, amrex::Real cp_d_val, amrex::Real dz, int theta_comp)
+{
+    amrex::ParallelFor(bx,
+        [cons_arr, heat_arr, dt_lev, cp_d_val, dz, theta_comp] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            if (k == 0) {
+                amrex::Real heat_source = heat_arr(i,j,0) * dt_lev / (cp_d_val * dz);
+                cons_arr(i,j,k,theta_comp) += heat_source;
+            }
+        });
+}
+
+static void LaunchApplyMoistureFluxKernel(
+    const amrex::Box& bx,
+    const amrex::Array4<amrex::Real>& cons_arr,
+    const amrex::Array4<const amrex::Real>& moist_arr,
+    amrex::Real dt_lev, amrex::Real dz, int q1_comp)
+{
+    amrex::ParallelFor(bx,
+        [cons_arr, moist_arr, dt_lev, dz, q1_comp] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+            if (k == 0) {
+                amrex::Real moisture_source = moist_arr(i,j,0) * dt_lev / dz;
+                cons_arr(i,j,k,q1_comp) += moisture_source;
+            }
+        });
+}
+
 #ifdef ERF_USE_WINDFARM
 #include <ERF_WindFarm.H>
 #endif
@@ -325,10 +372,7 @@ ERF::Advance (int lev, Real time, Real dt_lev, int iteration, int /*ncycle*/)
                 
                 // Extract k=1 (not k=0 which has NoSlipWall BC) and average from faces to cell centers
                 // k=1 is the first cell center above ground where velocity is non-zero
-                ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) {
-                    u_2d(i,j,0) = 0.5 * (u_3d(i,j,1) + u_3d(i+1,j,1));
-                    v_2d(i,j,0) = 0.5 * (v_3d(i,j,1) + v_3d(i,j+1,1));
-                });
+                LaunchExtractSurfaceWindKernel(bx, u_3d, v_3d, u_2d, v_2d);
             }
             
             // Fill boundary for MPI ghost cells
@@ -398,13 +442,7 @@ ERF::Advance (int lev, Real time, Real dt_lev, int iteration, int /*ncycle*/)
                     
                     // Convert heat flux (W/m²) to source term for RhoTheta
                     // Use Cp_d from ERF_Constants.H (1004.5 J/(kg·K))
-                    ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) {
-                        if (k == 0) {  // Only apply at surface
-                            // Q_fire [W/m²] * dt [s] / (Cp_d * dz) -> temperature change
-                            Real heat_source = heat_arr(i,j,0) * dt_lev / (Cp_d * dz);
-                            cons_arr(i,j,k,RhoTheta_comp) += heat_source;
-                        }
-                    });
+                    LaunchApplyHeatFluxKernel(bx, cons_arr, heat_arr, dt_lev, Cp_d, dz, int(RhoTheta_comp));
                 }
             }
 
@@ -423,14 +461,7 @@ ERF::Advance (int lev, Real time, Real dt_lev, int iteration, int /*ncycle*/)
                     // Apply moisture flux as source term to RhoQ (water vapor density)
                     // Moisture flux [kg/m²/s] -> source [kg/m³/s]
                     // RhoQ += (moisture_flux / dz) * dt
-                    ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
-                        if (k == 0) {  // Only apply at surface
-                            // Convert moisture flux to water vapor density tendency
-                            // moist_arr is in kg/m²/s, dz is cell height
-                            Real moisture_source = moist_arr(i,j,0) * dt_lev / dz;
-                            cons_arr(i,j,k,RhoQ1_comp) += moisture_source;
-                        }
-                    });
+                    LaunchApplyMoistureFluxKernel(bx, cons_arr, moist_arr, dt_lev, dz, int(RhoQ1_comp));
                 }
             }
         }

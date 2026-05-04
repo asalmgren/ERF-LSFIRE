@@ -8,6 +8,24 @@
 #include <fstream>
 #include <iomanip>
 
+// nvcc forbids __device__ lambdas in private/protected member functions.
+// Hoist the box-fill kernel here so load_fuel_data and load_ignition_data
+// can stay private.
+static void LaunchFillFromNCKernel(const amrex::Box& gtbx,
+                                    const amrex::Array4<int>& dst_arr,
+                                    const amrex::Array4<const int>& src_arr,
+                                    int i_lo, int i_hi, int j_lo, int j_hi)
+{
+    amrex::ParallelFor(gtbx,
+        [dst_arr, src_arr, i_lo, i_hi, j_lo, j_hi] AMREX_GPU_DEVICE
+        (int i, int j, int) noexcept
+    {
+        int li = amrex::min(amrex::max(i, i_lo), i_hi);
+        int lj = amrex::min(amrex::max(j, j_lo), j_hi);
+        dst_arr(i,j,0) = src_arr(li,lj,0);
+    });
+}
+
 FireELMFIRE::FireELMFIRE()
 {
     m_engine = std::make_unique<ELMFIRE::FireEngine>();
@@ -97,7 +115,11 @@ void FireELMFIRE::Init(int lev,
     m_config.slope_y = m_uniform_slope_y;
 
     // Wind data scale factor
-    m_config.wind_data_scale_factor = m_wind_data_scale_factor;
+    m_config.wind_data_scale_factor  = m_wind_data_scale_factor;
+    m_config.use_grid_aware_burnout  = m_use_grid_aware_burnout;
+    m_config.use_source_fuel_scaling = m_use_source_fuel_scaling;
+    m_config.source_fuel_exponent    = m_source_fuel_exponent;
+    m_config.terrain_scale_factor    = m_terrain_scale_factor;
 
     // Ignition parameters
     m_config.ignition_x = m_ignition_x;
@@ -580,6 +602,12 @@ void FireELMFIRE::LoadConfigFromSolverChoice(SolverChoice& sc)
     // Wind data scale factor (HRRR bias correction)
     pp.query("wind_data_scale_factor", m_wind_data_scale_factor);
 
+    // Fire suppression options (default: off for backward compatibility)
+    pp.query("use_grid_aware_burnout",  m_use_grid_aware_burnout);
+    pp.query("use_source_fuel_scaling", m_use_source_fuel_scaling);
+    pp.query("source_fuel_exponent",    m_source_fuel_exponent);
+    pp.query("terrain_scale_factor",    m_terrain_scale_factor);
+
     // Subcycling (fire updates every N atmospheric timesteps)
     pp.query("subcycle_interval", m_subcycle_interval);
     if (m_subcycle_interval < 1) m_subcycle_interval = 1;
@@ -631,13 +659,7 @@ void FireELMFIRE::load_fuel_data(const amrex::Geometry& geom,
         const Array4<int>& dst_arr = dst.array();
         const Array4<const int>& src_arr = NC_fuel_iab.const_array();
 
-        ParallelFor(gtbx, [=] AMREX_GPU_DEVICE (int i, int j, int) noexcept
-        {
-            // Clamp to domain boundaries (handle out-of-bounds)
-            int li = amrex::min(amrex::max(i, i_lo), i_hi);
-            int lj = amrex::min(amrex::max(j, j_lo), j_hi);
-            dst_arr(i,j,0) = src_arr(li,lj,0);
-        });
+        LaunchFillFromNCKernel(gtbx, dst_arr, src_arr, i_lo, i_hi, j_lo, j_hi);
     }
 
     m_fuel_model_lev[0]->FillBoundary(geom.periodicity());
@@ -686,13 +708,7 @@ void FireELMFIRE::load_ignition_data(const amrex::Geometry& geom,
         const Array4<int>& dst_arr = dst.array();
         const Array4<const int>& src_arr = NC_ign_iab.const_array();
 
-        ParallelFor(gtbx, [=] AMREX_GPU_DEVICE (int i, int j, int) noexcept
-        {
-            // Clamp to domain boundaries (handle out-of-bounds)
-            int li = amrex::min(amrex::max(i, i_lo), i_hi);
-            int lj = amrex::min(amrex::max(j, j_lo), j_hi);
-            dst_arr(i,j,0) = src_arr(li,lj,0);
-        });
+        LaunchFillFromNCKernel(gtbx, dst_arr, src_arr, i_lo, i_hi, j_lo, j_hi);
         
         // Count ignited cells on this MFIter
         for (int j = gtbx.smallEnd(1); j <= gtbx.bigEnd(1); j++) {
@@ -767,6 +783,12 @@ void FireELMFIRE::PrintConfig() const
         amrex::Print() << "    Subcycling: fire updates every " << m_subcycle_interval
                        << " atmospheric steps\n";
     }
+    amrex::Print() << "  Fire suppression:\n";
+    amrex::Print() << "    use_grid_aware_burnout:  " << (m_use_grid_aware_burnout  ? "true" : "false") << "\n";
+    amrex::Print() << "    use_source_fuel_scaling: " << (m_use_source_fuel_scaling ? "true" : "false") << "\n";
+    if (m_use_source_fuel_scaling)
+        amrex::Print() << "    source_fuel_exponent:    " << m_source_fuel_exponent << "\n";
+    amrex::Print() << "    terrain_scale_factor:    " << m_terrain_scale_factor << "\n";
 }
 
 void FireELMFIRE::WriteCheckpointData(const std::string& chk_dir, int lev) const

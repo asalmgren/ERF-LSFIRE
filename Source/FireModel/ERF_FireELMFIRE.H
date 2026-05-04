@@ -216,6 +216,12 @@ private:
     /// Wind data scale factor (HRRR bias correction, default 0.7)
     amrex::Real m_wind_data_scale_factor = 0.7;
 
+    /// Fire suppression options (default: off)
+    bool m_use_grid_aware_burnout  = false;
+    bool m_use_source_fuel_scaling = false;
+    amrex::Real m_source_fuel_exponent   = 1.0;
+    amrex::Real m_terrain_scale_factor   = 1.0;  ///< Slope amplification multiplier (1.0 = normal)
+
     /// Subcycling parameters (fire runs at larger timestep than atmosphere)
     int m_subcycle_interval = 1;         // Fire updates every N atmospheric steps (1 = every step)
     amrex::Real m_accumulated_dt = 0.0;  // Accumulated time since last fire update
