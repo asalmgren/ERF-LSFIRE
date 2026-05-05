@@ -665,7 +665,9 @@ ERF::Evolve ()
         if (writeNow(cur_time, step+1, m_plot3d_int_1, m_plot3d_per_1, dt[0], last_plot3d_file_time_1)) {
             last_plot3d_file_step_1 = step+1;
             Write3DPlotFile(1,plotfile3d_type_1,plot3d_var_names_1);
+#ifdef ERF_USE_FIRE
             fire_model.WriteFirePlotFile(step+1, cur_time);
+#endif
             for (int lev = 0; lev <= finest_level; ++lev) {lsm.Plot(lev, step+1);}
             if (m_plot3d_per_1 > 0.) {last_plot3d_file_time_1 += m_plot3d_per_1;}
         }
@@ -716,7 +718,9 @@ ERF::Evolve ()
     // Write plotfiles at final time
     if ( (m_plot3d_int_1 > 0 || m_plot3d_per_1 > 0.) && istep[0] > last_plot3d_file_step_1 ) {
         Write3DPlotFile(1,plotfile3d_type_1,plot3d_var_names_1);
+#ifdef ERF_USE_FIRE
         fire_model.WriteFirePlotFile(istep[0], t_new[0]);
+#endif
         if (m_plot3d_per_1 > 0.) {last_plot3d_file_time_1 += m_plot3d_per_1;}
     }
     if ( (m_plot3d_int_2 > 0 || m_plot3d_per_2 > 0.) && istep[0] > last_plot3d_file_step_2) {
@@ -1667,7 +1671,9 @@ ERF::InitData_post ()
         if (m_plot3d_int_1 > 0 || m_plot3d_per_1 > 0.)
         {
             Write3DPlotFile(1,plotfile3d_type_1,plot3d_var_names_1);
+#ifdef ERF_USE_FIRE
             fire_model.WriteFirePlotFile(istep[0], t_new[0]);
+#endif
             if (m_plot3d_per_1 > 0.) {last_plot3d_file_time_1 += m_plot3d_per_1;}
             last_plot3d_file_step_1 = istep[0];
         }
