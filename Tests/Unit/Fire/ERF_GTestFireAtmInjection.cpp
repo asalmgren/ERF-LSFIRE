@@ -10,8 +10,8 @@
 #include <ERF_Constants.H>
 #include <ERF_IndexDefines.H>
 #include <ERF_EOS.H>
-#include "ERF_FireAtmCoupling.H"
-#include "ERF_FireSmokeEmission.H"
+#include "ERF_FireAtmInjection.H"
+#include "ERF_FireSmoke.H"
 
 /**
  * @file ERF_GTestFireAtmInjection.cpp

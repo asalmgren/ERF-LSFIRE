@@ -1,19 +1,19 @@
-#ifndef ERF_FIRE_SURFACE_HEIGHT_H
-#define ERF_FIRE_SURFACE_HEIGHT_H
+#ifndef ERF_FIRE_TERRAIN_H
+#define ERF_FIRE_TERRAIN_H
 
 #include <AMReX_MultiFab.H>
 #include <AMReX_Geometry.H>
 #include <ERF_FireGrid.H>
 
 /**
- * @file ERF_FireSurfaceHeight.H
+ * @file ERF_FireTerrain.H
  * @brief Ground of the atmospheric columns, seen from the fire grid
  *
  * The atmosphere side of the fire coupling: the ground elevation the shared
  * wind sampler (ERF_FireWindExtract.H) measures its sampling height from, for
  * the column holding each fire cell and for the four columns of its bilinear
- * stencil. Terrain slopes, which a fire engine may take from its own
- * fire-resolved terrain, are the engine's.
+ * stencil. Terrain slopes, which a fire model may take from its own
+ * fire-resolved terrain, are the model's.
  */
 
 /**
@@ -36,7 +36,7 @@
  * @param[in]  geom_atm        Geometry of the level the fire grid refines
  * @param[in]  fg              Fire grid structure
  *
- * Called once by the fire engine at initialisation; terrain is static.
+ * Called once by the fire model at initialisation; terrain is static.
  */
 void compute_fire_surface_height(
     amrex::MultiFab& fire_surface_z,
@@ -64,7 +64,7 @@ void compute_fire_surface_height(
  * @param[in]  geom_atm         Geometry of the level the fire grid refines
  * @param[in]  fg               Fire grid structure
  *
- * Called once by the fire engine at initialisation; terrain is static.
+ * Called once by the fire model at initialisation; terrain is static.
  */
 void compute_fire_column_grounds(
     amrex::MultiFab& fire_col_ground,

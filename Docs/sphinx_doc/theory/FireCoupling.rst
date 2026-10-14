@@ -11,52 +11,64 @@ fire, and the fire's heat drives the wind. ERF provides the atmosphere side of
 that coupling: where the fire grid sits, what the fire is handed each step,
 and how its heat, water vapour and smoke enter the atmosphere. The fire
 itself, the model that spreads the front and computes the heat it releases,
-is a *fire engine* that plugs into this coupling. No fire engine is built into
-this repository; the coupling layer is the common part every engine shares.
+is a *fire model* that plugs into this coupling, the way land surface and
+wind farm models plug into ERF. No fire model is built into this repository;
+the coupling is the common part every model shares.
 
 Building with the fire coupling
 -------------------------------
 
-The coupling layer is compiled with the CMake option ``ERF_ENABLE_FIRE=ON``
-(``USE_FIRE = TRUE`` with GNU make); it is off by default. With it on, the
-state carries one more passive scalar, the smoke tracer (``smoke`` in the
-plotfile), whether or not a fire runs. Every checkpoint, from any build,
-records the number of passive scalars in a small file ``ScalarLayout``, so
-that a build configured differently refuses to restart from it instead of
-reading the components shifted; a checkpoint without the file is read as one
-scalar, so older checkpoints restart in builds without the fire coupling.
+The fire model container and its coupling are compiled with the CMake option
+``ERF_ENABLE_FIRE=ON`` (``USE_FIRE = TRUE`` with GNU make); it is off by
+default. With it on, the state carries one more passive scalar, the smoke
+tracer (``smoke`` in the plotfile), whether or not a fire runs. Every
+checkpoint, from any build, records the number of passive scalars in a small
+file ``ScalarLayout``, so that a build configured differently refuses to
+restart from it instead of reading the components shifted; a checkpoint
+without the file is read as one scalar, so older checkpoints restart in builds
+without the fire coupling.
 
-:cpp:`erf.fire.enable = true` needs an engine built into the executable
-(``Source/FireCoupling/ERF_FireEngineFactory.cpp``); without one the run stops
-at start-up and points to the template described below. A build without
-``ERF_ENABLE_FIRE`` stops on :cpp:`erf.fire.enable = true` as well.
+:cpp:`erf.fire_model` selects the fire model (``None`` by default); a model
+other than ``None`` must be built into the executable, and a build without
+``ERF_ENABLE_FIRE`` stops on a fire deck. The keys that selected the fire
+before :cpp:`erf.fire_model`, :cpp:`erf.fire.enable` and
+:cpp:`erf.fire.engine`, stop the run with a message pointing to it.
 
-Coupling layer and fire engines
--------------------------------
+The fire model container and fire models
+----------------------------------------
 
-The code is split into two parts, so that more than one fire model can be
-coupled to ERF the same way.
+The code follows the pattern of ERF's land surface and wind farm models, so
+that more than one fire model can be coupled to ERF the same way
+(``Source/FireModel``):
 
-* **The coupling layer** (``Source/FireCoupling``, the ``FireCoupler`` class)
-  is everything on the atmosphere side. It checks that the mesh can carry a
-  fire grid, builds that grid on the level :cpp:`erf.fire.anchor_level`
-  selects and hands the fire the atmospheric state at the start of each of
-  its steps. With ``"lagged"`` or ``"synchronous"`` coupling it averages the
-  heat the fire reports onto the atmospheric columns, holds it for one step,
-  and injects it at every Runge-Kutta stage of the next step; with
-  :cpp:`erf.fire.smoke_enable` it injects the smoke tracer the same way, also
-  with ``"passive"`` coupling, which injects no heat. It saves the heat it
-  holds in the checkpoint, so a restarted run injects the same heat in its
-  first step as an uninterrupted one. It also provides helpers a fire engine
-  may use: a wind sampler (``ERF_FireWindExtract.H``) and the ground height
-  of each atmospheric column (``ERF_FireSurfaceHeight.H``).
-* **The fire engine** (``FireEngine`` in ``ERF_FireEngine.H``) is the fire
-  model itself: it advances the front on the fire grid and reports, after
-  each step, the sensible and latent heat flux into the air on the fire grid
-  [W/m²], averaged over its step. It writes its own checkpoint state and fire
-  plotfile, and may offer a level set, a reference wind and the heat release
-  to other surface models. :cpp:`erf.fire.engine` selects it among the
-  engines built in.
+* **The container** (``FireModel`` in ``ERF_FireModel.H``, held by ERF as it
+  holds its ``LandSurface``) keeps one model per level: a ``NullFire``
+  (``Null/ERF_NullFire.H``) on every level, and the selected model on the
+  level the fire grid refines, :cpp:`erf.fire.anchor_level`. It also holds
+  everything on the atmosphere side (``Coupling/``): it checks that the mesh
+  can carry a fire grid, builds that grid and hands the model the atmospheric
+  state at the start of each of its steps. With ``"lagged"`` or
+  ``"synchronous"`` coupling it averages the heat the model reports onto the
+  atmospheric columns, holds it for one step, and injects it at every
+  Runge-Kutta stage of the next step; with :cpp:`erf.fire.smoke_enable` it
+  injects the smoke tracer the same way (``Features/``), also with
+  ``"passive"`` coupling, which injects no heat. It saves the heat it holds in
+  the checkpoint, so a restarted run injects the same heat in its first step as
+  an uninterrupted one.
+* **The fire model** (derived from ``FireModelBase`` in
+  ``ERF_FireModelBase.H``) is the fire physics: it advances the front on the
+  fire grid and reports, after each step, the sensible and latent heat flux
+  into the air on the fire grid [W/m²], averaged over its step. The model
+  reports its fields by name (``FireVar`` in ``ERF_FireModelBase.H``: the two
+  fluxes, a level set, and the open fraction and roof height of
+  :cpp:`erf.fire.heat_open_fraction`); a field it does not have is simply
+  absent. It writes its own fire plotfile and, when it supports restart, its
+  own checkpoint state; without restart support a restart with the fire
+  running stops before reading the checkpoint.
+* **Tools** (``Tools/``) are helpers a model may use: a wind sampler
+  (``ERF_FireWindExtract.H``), the ground height of each atmospheric column
+  (``ERF_FireTerrain.H``) and the optional atmospheric inputs
+  (``ERF_FireAtmState.H``).
 
 The fire grid refines the columns of its level by :cpp:`erf.fire.grid_ratio`
 in x and y. Each fire box is an atmospheric box refined by the ratio, owned
@@ -67,48 +79,50 @@ run (on a level above 0, :cpp:`erf.regrid_int` must be off), its boxes must
 form one rectangle, no box may be split in z, and the bottom boundary must be
 a surface layer.
 
-The engine reads, at the start of each step, the face velocities of the fire
+The model reads, at the start of each step, the face velocities of the fire
 grid's level (before the dynamical core with ``"passive"`` and ``"lagged"``
-coupling, after it with ``"synchronous"``), the cell-centre heights, the air
+coupling, after it with ``"synchronous"``) and the cell-centre heights. The
+container computes the optional inputs only for a model that requests them
+(``FireModelBase::RequestedInputs``): the vertical velocity, the air
 temperature and relative humidity of the lowest cell before the dynamical
-core, and, when it asks for it, the surface precipitation of every column
-from the microphysics accumulators (the run then needs a microphysics scheme
-with precipitation). What it does with them, including the height it samples
-the wind at and any correction it applies to that wind, is the engine's
-choice.
+core, and the surface precipitation of every column from the microphysics
+accumulators (the run then needs a microphysics scheme with precipitation).
+These fields are ERF's own, read in place (no copy is made), and valid only
+during the model's step. What the model does with them, including the height
+it samples the wind at and any correction it applies to that wind, is the
+model's choice.
 
-Adding a fire engine
-~~~~~~~~~~~~~~~~~~~~
+Adding a fire model
+~~~~~~~~~~~~~~~~~~~
 
-``Source/FireCoupling/ERF_FireEngineTemplate.H`` is the starting point for a
-new fire model. It declares every method a fire engine provides, each with a
+``Source/FireModel/ERF_FireModelTemplate.H`` is the starting point for a new
+fire model. It declares every method a fire model provides, each with a
 comment on what ERF hands it, what ERF expects back and when it is called. It
 holds declarations only: nothing in it has a body, no input selects it and
-nothing creates one, so it adds no code to a run. ``ERF_FireCoupler.cpp``
-checks at compile time that it declares every method ``FireEngine`` requires
-(the pure virtual ones), and ``override`` checks the signature of every method
-it declares; the optional methods are kept in it by hand.
+nothing creates one, so it adds no code to a run. ``ERF_FireModel.cpp``
+checks at compile time that it declares every method ``FireModelBase``
+requires (the pure virtual ones), and ``override`` checks the signature of
+every method it declares; the optional methods are kept in it by hand.
 
-To add an engine:
+To add a model:
 
-#. Copy the template into the new model's own folder, rename the class, and
-   write the method bodies in a ``.cpp`` file there. Delete the optional
-   methods the engine does not provide; their defaults then apply.
-#. Read the model's inputs under its own prefix (``erf.fire.<engine>.*``), so
-   they never mix with the coupling's keys or another engine's.
-#. Register the engine in ``Source/FireCoupling/ERF_FireEngineFactory.cpp``:
-   its name in ``fire_engine_names()`` (the first name is the default of
-   :cpp:`erf.fire.engine`) and a branch creating it in ``make_fire_engine()``.
-   Add the new folder's sources to ``CMake/BuildERFExe.cmake`` (inside
-   ``if(ERF_ENABLE_FIRE)``) and to a ``Make.package`` included from
-   ``Exec/Make.ERF`` under ``USE_FIRE``.
-#. Run the ``FireCoupler`` unit tests (``Tests/Unit/Fire/ERF_GTestFireCoupler.cpp``,
-   whose stand-in engine is the smallest engine that works) with the new
-   engine, and a restart of a coupled run against an uninterrupted one: the
+#. Create ``Source/FireModel/<Model>/``, copy the template there, rename the
+   class, and write the method bodies in a ``.cpp`` file there. Delete the
+   optional methods the model does not provide; their defaults then apply.
+#. Read the model's inputs under its own prefix (``erf.fire.<model>.*``), so
+   they never mix with the coupling's keys or another model's.
+#. Add the model to ``FireType`` (``ERF_DataStruct.H``) and install it in
+   ``ERF::initializeFire`` with ``fire_model.SetModel<Model>()`` under the
+   model's build define. Add the folder's sources to
+   ``CMake/BuildERFExe.cmake`` (inside ``if(ERF_ENABLE_FIRE)``) and its
+   ``Make.package`` to ``Exec/Make.ERF`` under ``USE_FIRE``.
+#. Run the ``FireModel`` unit tests (``Tests/Unit/Fire/ERF_GTestFireModel.cpp``,
+   whose stand-in model is the smallest model that works) with the new
+   model, and a restart of a coupled run against an uninterrupted one: the
    atmosphere and fire plotfiles must agree at zero tolerance.
 
-The engine owns its fire physics and its own state, including its checkpoint
-and plotfile; the coupling layer does the rest, as described on this page.
+The model owns its fire physics and its own state, including its checkpoint
+and plotfile; the container does the rest, as described on this page.
 
 Coupling modes
 --------------
@@ -236,7 +250,7 @@ reading the checkpoint.
 Heat placement around buildings
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-An engine that knows where buildings stand can report, per atmospheric column,
+A model that knows where buildings stand can report, per atmospheric column,
 the open fraction :math:`f` of its footprint and the mean roof height :math:`H`
 of the rest, above the ground. With :cpp:`erf.fire.heat_open_fraction` the
 coupling places the heat accordingly: a cell's share of the exponential profile
@@ -257,7 +271,7 @@ plain profile's share in the cells below the roof and
 :math:`L = 1 - e^{-z_{top}/\alpha_g}`, the share placed below the roof falls
 from :math:`B` to :math:`f B L / (L - (1 - f) B)`, more than :math:`f B`
 because the renormalisation also raises the cells below the roof; the rest is
-lifted above it. An engine
+lifted above it. A model
 that reports no open fraction leaves the plain profile in place, with a
 warning at start-up.
 
@@ -272,8 +286,8 @@ the smoke tracer is fed at the surface with
    F_{smoke} = \epsilon\, \frac{Q}{H_c} \quad [\mathrm{kg\,m^{-2}\,s^{-1}}],
 
 where :math:`\epsilon` = :cpp:`erf.fire.smoke_emission_factor` (kg of smoke
-per kg of fuel, default 0.02) and :math:`H_c` is the heat the engine releases
-per kilogram of fuel burnt (``FireEngine::smoke_heat_per_kg``). The emission
+per kg of fuel, default 0.02) and :math:`H_c` is the heat the model releases
+per kilogram of fuel burnt (``FireModelBase::SmokeHeatPerKg``). The emission
 uses the same held, area-averaged heat flux as the energy injection and is
 placed in the lowest atmospheric cell. The tracer is advected and diffused
 like any other scalar and is plotted as ``smoke``; its integral is printed
@@ -286,7 +300,7 @@ Inputs
 ------
 
 The coupling's inputs are listed under :ref:`Inputs <sec:InputsFire>`; an
-engine's own inputs are its own.
+model's own inputs are its own.
 
 References
 ----------

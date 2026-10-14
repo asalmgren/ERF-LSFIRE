@@ -1,4 +1,4 @@
-#include <ERF_FireSurfaceHeight.H>
+#include <ERF_FireTerrain.H>
 
 using namespace amrex;
 

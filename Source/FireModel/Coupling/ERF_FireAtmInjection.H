@@ -53,9 +53,9 @@
 //
 // Latent heat:
 //   WRF-Fire computes grnqfx (ground latent heat flux) alongside grnhfx and
-//   passes both through fire_tendency. Here the fire engine computes the
+//   passes both through fire_tendency. Here the fire model computes the
 //   latent flux (from the fuel moisture and the water of combustion of the fuel
-//   it burns) and hands it over in FireFluxes::latent [W/m2]; the coupling
+//   it burns) and reports it as FireVar::latent_flux [W/m2]; the coupling
 //   distributes it with the same exponential profile.
 //
 // Assumptions:
@@ -63,7 +63,7 @@
 //     (erf.fire.anchor_level, the finest level by default); coarser levels see
 //     the result through average-down with erf.coupling_type = TwoWay (the
 //     default), not with OneWay; finer levels not at all.
-//   - The engine's sensible and latent fluxes (FireFluxes) are on the fire grid
+//   - The model's sensible and latent fluxes (FireVar) are on the fire grid
 //     (C*nx x C*ny x 1 over the fire region).
 //   - The coarsening from fire grid to atmospheric grid is the area average of
 //     average_down(), with the region's lower corner added (FireGrid::atm_lo).
@@ -78,8 +78,8 @@
 //     same slots per stage, this routine must be moved out of the per-stage
 //     slow-RHS path and called once before mri_integrator.advance() instead.
 
-#ifndef ERF_FIRE_ATM_COUPLING_H
-#define ERF_FIRE_ATM_COUPLING_H
+#ifndef ERF_FIRE_ATM_INJECTION_H
+#define ERF_FIRE_ATM_INJECTION_H
 
 #include <AMReX_MultiFab.H>
 #include <AMReX_Geometry.H>
@@ -240,7 +240,7 @@ inline void apply_fire_tendency_to_cc_source(
     Real dz_avg = dx[2];
 
     const bool has_latent_global = (Q_lat_atm != nullptr) && has_moisture;
-    // The open fraction and roof height are handed in whenever the engine
+    // The open fraction and roof height are handed in whenever the model
     // reports them; the weights only use them when asked.
     const bool have_open = (open_frac_atm != nullptr) && (roof_h_atm != nullptr);
     const bool use_open  = have_open && use_open_weights;
@@ -267,7 +267,7 @@ inline void apply_fire_tendency_to_cc_source(
     // Column normalisation of the open-fraction weights: one k = klo slab per
     // box, filled once per column (the boxes hold whole columns, which the
     // fire prerequisites assert), before the tiled loop that reads it.
-    // The engine's open fraction and roof height are read with the level's
+    // The model's open fraction and roof height are read with the level's
     // MFIter below, so they must hold one k = klo slab per box of the level,
     // in its order and on its DistributionMapping (only a debug build checks
     // that inside AMReX).
@@ -282,7 +282,7 @@ inline void apply_fire_tendency_to_cc_source(
             same_layout = (open_frac_atm->boxArray()[ib] == slab) && (roof_h_atm->boxArray()[ib] == slab);
         }
         AMREX_ALWAYS_ASSERT_WITH_MESSAGE(same_layout,
-            "[FIRE] the engine's heat_open_fraction_atm and roof_height_atm must hold one k = 0 slab "
+            "[FIRE] the model's open_fraction_atm and roof_height_atm must hold one k = 0 slab "
             "per box of the fire grid's level, in its box order and on its DistributionMapping");
     }
     MultiFab norm_mf;
@@ -561,4 +561,4 @@ inline void apply_fire_tendency_to_cc_source(
     }
 }
 
-#endif  // ERF_FIRE_ATM_COUPLING_H
+#endif  // ERF_FIRE_ATM_INJECTION_H

@@ -8,13 +8,13 @@
 #include <AMReX_Geometry.H>
 #include <AMReX_MultiFab.H>
 
-#include "ERF_FirePrecip.H"
+#include "ERF_FireAtmState.H"
 #include "ERF_FireGrid.H"
 
 /**
  * @file ERF_GTestFirePrecip.cpp
- * @brief The rain per column handed to an engine that asks for it
- *        (FireEngine::wants_surface_precip): the accumulation difference to mm/hr, the combination of the
+ * @brief The rain per column handed to a model that asks for it
+ *        (FireInput_SurfacePrecip): the accumulation difference to mm/hr, the combination of the
  *        scheme-native accumulators without double counting, the per-column rate
  *        with its rolling snapshot, and the map onto the fire grid.
  */

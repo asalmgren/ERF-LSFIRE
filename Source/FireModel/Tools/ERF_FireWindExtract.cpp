@@ -108,7 +108,7 @@ void fill_fire_wind_from_interpolation(
         Array4<const Real> z_surf_arr = fire_surface_z_mf.const_array(mfi);
         Array4<const Real> z_col_arr  = fire_col_ground_mf.const_array(mfi);
 
-        // Per-cell sampling height, when the engine supplies one
+        // Per-cell sampling height, when the model supplies one
         Array4<const Real> z_ref_cell_arr;
         if (z_ref_cell_mf != nullptr) {
             z_ref_cell_arr = z_ref_cell_mf->const_array(mfi);

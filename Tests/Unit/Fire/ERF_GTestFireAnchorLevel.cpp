@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "ERF_FireGrid.H"
-#include "ERF_FireAtmCoupling.H"
-#include "ERF_FireSurfaceHeight.H"
+#include "ERF_FireAtmInjection.H"
+#include "ERF_FireTerrain.H"
 #include "ERF_FireWindExtract.H"
 
 /**
@@ -381,7 +381,7 @@ TEST(FireAnchorLevel, WindIsSampledFromTheSurroundingColumns)
 }
 
 /**
- * Each fire cell sampled at its own height (the per-cell field an engine hands
+ * Each fire cell sampled at its own height (the per-cell field a model hands
  * the sampler, for example a per-fuel wind height): with u = z and
  * v = 2 z in every column a cell sampled at h reads (h, 2 h), the height
  * differing from cell to cell (cell_height, 15 to 55 m, between cell centres),

@@ -1,10 +1,9 @@
-#include <ERF_FireCoupler.H>
-#include <ERF_FireEngineTemplate.H>
-#include <ERF_FireAtmCoupling.H>
+#include <ERF_FireModel.H>
+#include <ERF_FireModelTemplate.H>
+#include <ERF_FireAtmInjection.H>
 #include <ERF_FirePrerequisites.H>
-#include <ERF_FirePrecip.H>
-#include <ERF_FireSmokeEmission.H>
-#include <ERF_FireUtils.H>
+#include <ERF_FireAtmState.H>
+#include <ERF_FireSmoke.H>
 #include <ERF_IndexDefines.H>
 #include <ERF.H>
 #include <AMReX_Print.H>
@@ -17,13 +16,13 @@
 
 using namespace amrex;
 
-// The template for new engines declares every method FireEngine requires: a pure
-// virtual method added to the interface and missing there makes the template
-// abstract. Optional methods (with a default body) are not caught here; the
-// interface asks for them to be added to the template by hand. Compile time
-// only; no FireEngineTemplate is ever created.
-static_assert(!std::is_abstract_v<FireEngineTemplate>,
-              "ERF_FireEngineTemplate.H must declare every pure virtual method of FireEngine");
+// The template for new models declares every method FireModelBase requires: a
+// pure virtual method added to the interface and missing there makes the
+// template abstract. Optional methods (with a default body) are not caught
+// here; the interface asks for them to be added to the template by hand.
+// Compile time only; no FireModelTemplate is ever created.
+static_assert(!std::is_abstract_v<FireModelTemplate>,
+              "ERF_FireModelTemplate.H must declare every pure virtual method of FireModelBase");
 
 namespace {
 
@@ -67,46 +66,92 @@ void report_fire_region(const ERF& erf, int lev, const FireGrid& fg)
 
 } // namespace
 
-FireCoupler::FireCoupler (const FireCouplingParams& params, std::unique_ptr<FireEngine> engine)
-    : m_params(params), m_engine(std::move(engine))
+void
+FireModel::ReSize (int nlev)
 {
-    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(m_engine != nullptr, "[FIRE] FireCoupler needs a fire engine");
+    m_fire.resize(nlev);
+    for (auto& f : m_fire) { f = std::make_unique<NullFire>(); }
 }
 
 void
-FireCoupler::initialize (const ERF& erf,
-                         int lev,
-                         const SurfaceLayer* surface_layer,
-                         const MultiFab* z_phys_nd_atm)
+FireModel::ReadParameters ()
 {
-    // The ERF configuration a fire grid needs, then the engine's own inputs
+    m_params = FireCouplingParams::read();
+}
+
+void
+FireModel::SetModel (std::unique_ptr<FireModelBase> model)
+{
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(model != nullptr, "[FIRE] FireModel::SetModel needs a model");
+    m_pending   = std::move(model);
+    m_has_model = true;
+}
+
+const MultiFab*
+FireModel::Get_Data_Ptr (int lev, const std::string& name) const
+{
+    return (lev >= 0 && lev < static_cast<int>(m_fire.size())) ? m_fire[lev]->FireDataPtr(name) : nullptr;
+}
+
+void
+FireModel::Init (const ERF& erf, int lev,
+                 const SurfaceLayer* surface_layer,
+                 const MultiFab& z_phys_nd,
+                 Real stop_time, int max_step, int steps_per_coarse_step,
+                 bool restarting)
+{
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(m_has_model, "[FIRE] FireModel::Init without a model (SetModel)");
+
+    // The ERF configuration a fire grid needs; the model checks its own inputs in its Init
     verify_fire_prerequisites(erf, lev, surface_layer, m_params.grid_ratio);
-    m_engine->verify_prerequisites(erf, lev);
 
     FireGrid fg = create_fire_grid(erf.boxArray(lev), erf.DistributionMap(lev),
                                    erf.Geom(lev), m_params.grid_ratio);
     fg.lev = lev;
     report_fire_region(erf, lev, fg);
-    set_fire_grid(lev, fg, erf.boxArray(lev), erf.DistributionMap(lev), erf.Geom(lev));
+    SetFireGrid(lev, fg, erf.boxArray(lev), erf.DistributionMap(lev), erf.Geom(lev));
 
-    m_engine->initialize(erf, lev, m_fg, surface_layer, z_phys_nd_atm);
+    const FireSetup setup{lev, m_fg, erf.Geom(lev), z_phys_nd, surface_layer,
+                          stop_time, max_step, steps_per_coarse_step, restarting};
+    ActiveModel().Init(setup);
+
+    // The smoke tracer turns the sensible flux into the fuel burnt with the
+    // model's heat per kilogram
+    if (m_params.smoke_enable && !(ActiveModel().SmokeHeatPerKg() > 0.0_rt)) {
+        Abort(std::string("[FIRE] erf.fire.smoke_enable = true, but the fire model (") + ActiveModel().Name()
+              + ") reports no heat per kilogram of fuel burnt (FireModelBase::SmokeHeatPerKg)");
+    }
 
     // erf.fire.heat_open_fraction places the heat by the open fraction the
-    // engine reports; without one the heat is placed as if every column were open
+    // model reports; without one the heat is placed as if every column were open
     if (m_params.heat_open_fraction && m_params.injects_flux() &&
-        (!m_engine->heat_open_fraction_atm() || !m_engine->roof_height_atm())) {
-        amrex::Print() << "[FIRE] WARNING: erf.fire.heat_open_fraction = true, but the fire engine ("
-                       << m_engine->name() << ") reports no open fraction;"
+        (!ActiveModel().FireDataPtr(FireVar::open_fraction_atm) ||
+         !ActiveModel().FireDataPtr(FireVar::roof_height_atm))) {
+        amrex::Print() << "[FIRE] WARNING: erf.fire.heat_open_fraction = true, but the fire model ("
+                       << ActiveModel().Name() << ") reports no open fraction;"
                        << " the heat is placed as if every column were open\n";
     }
 }
 
 void
-FireCoupler::set_fire_grid (int lev, const FireGrid& fg,
-                            const BoxArray& ba_atm,
-                            const DistributionMapping& dm_atm,
-                            const Geometry& geom_atm)
+FireModel::SetFireGrid (int lev, const FireGrid& fg,
+                        const BoxArray& ba_atm,
+                        const DistributionMapping& dm_atm,
+                        const Geometry& geom_atm)
 {
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(m_has_model, "[FIRE] FireModel::SetFireGrid without a model (SetModel)");
+    if (static_cast<int>(m_fire.size()) <= lev) {
+        const int n0 = static_cast<int>(m_fire.size());
+        m_fire.resize(lev + 1);
+        for (int l = n0; l <= lev; ++l) { m_fire[l] = std::make_unique<NullFire>(); }
+    }
+    // Place the installed model on the fire grid's level, once
+    if (m_pending) {
+        m_fire[lev] = std::move(m_pending);
+    } else {
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(lev == m_lev, "[FIRE] FireModel: the fire grid's level cannot change");
+    }
+
     m_lev      = lev;
     m_fg       = fg;
     m_geom_atm = geom_atm;
@@ -115,7 +160,7 @@ FireCoupler::set_fire_grid (int lev, const FireGrid& fg,
     // The lagged fluxes live on the k = 0 slabs of the level's boxes, with the
     // level's owners. Ghost columns for a reader that samples the fluxes in the
     // halo around every tile: 5, the most ERF's state carries
-    // (ComputeGhostCells() + 1); update_flux_buffer() fills them.
+    // (ComputeGhostCells() + 1); UpdateFluxBuffer() fills them.
     BoxArray ba_atm_2d = ba_atm;
     ba_atm_2d.coarsen(IntVect(1, 1, nz));
     const IntVect ng_flux(5, 5, 0);
@@ -126,34 +171,43 @@ FireCoupler::set_fire_grid (int lev, const FireGrid& fg,
 }
 
 void
-FireCoupler::advance (Real time, Real dt,
-                      const MultiFab& S_old,
-                      const MultiFab& xvel_old, const MultiFab& yvel_old,
-                      const MultiFab& xvel_new, const MultiFab& yvel_new,
-                      const MultiFab& z_phys_cc,
-                      const BoxArray& ba2d,
-                      const Geometry& geom,
-                      const SurfacePrecipAccumulationSources& precip_sources)
+FireModel::Advance (int lev, Real time, Real dt,
+                    const MultiFab& S_old,
+                    const MultiFab& xvel_old, const MultiFab& yvel_old,
+                    const MultiFab& zvel_old,
+                    const MultiFab& xvel_new, const MultiFab& yvel_new,
+                    const MultiFab& zvel_new,
+                    const MultiFab& z_phys_cc,
+                    const BoxArray& ba2d,
+                    const Geometry& geom,
+                    const SurfacePrecipAccumulationSources& precip_sources)
 {
-    // Air temperature and RH at k=0 (an engine may drive a fuel moisture
-    // model with them), derived from the pre-dycore state. This is used in both lagged and synchronous
-    // modes: the moisture ODE uses time-averaged T, and the change in T from
-    // fire heating within one atmospheric step is small relative to the
-    // moisture time lag. The temperature is theta * Exner(p) (the moisture
-    // curves, Balbi's T_a and the threshold ignition take an air
-    // temperature); the plain k = 0 potential temperature used here before
-    // was 14-16 K too warm at 840 hPa.
-    MultiFab T_atm_k0(ba2d, S_old.DistributionMap(), 1, 0);
-    compute_t_from_conservative(T_atm_k0, S_old);
-    MultiFab RH_atm_k0(ba2d, S_old.DistributionMap(), 1, 0);
-    compute_rh_from_conservative(RH_atm_k0, S_old, geom);
+    if (lev != m_lev) { return; }
+
+    const unsigned inputs = ActiveModel().RequestedInputs();
+
+    // Air temperature and RH at k=0 (a model may drive a fuel moisture model
+    // with them), derived from the pre-dycore state. This is used in both
+    // lagged and synchronous modes: the moisture ODE uses time-averaged T, and
+    // the change in T from fire heating within one atmospheric step is small
+    // relative to the moisture time lag. The temperature is theta * Exner(p)
+    // (the moisture curves and ignition thresholds take an air temperature,
+    // not the k = 0 potential temperature, which is 14-16 K warmer at 840 hPa).
+    std::unique_ptr<MultiFab> T_atm_k0, RH_atm_k0;
+    if (inputs & FireInput_AirTemp) {
+        T_atm_k0 = std::make_unique<MultiFab>(ba2d, S_old.DistributionMap(), 1, 0);
+        compute_t_from_conservative(*T_atm_k0, S_old);
+    }
+    if (inputs & FireInput_RelHum) {
+        RH_atm_k0 = std::make_unique<MultiFab>(ba2d, S_old.DistributionMap(), 1, 0);
+        compute_rh_from_conservative(*RH_atm_k0, S_old, geom);
+    }
 
     // Surface precipitation accumulation of every column after this step's
-    // microphysics, for an engine that takes the rain per column
-    // (FireEngine::wants_surface_precip); the engine differences it against the
-    // accumulation it saw at its previous step.
+    // microphysics, for a model that takes the rain per column; the model
+    // differences it against the accumulation it saw at its previous step.
     std::unique_ptr<MultiFab> precip_accum_k0;
-    if (m_engine->wants_surface_precip()) {
+    if (inputs & FireInput_SurfacePrecip) {
         precip_accum_k0 = std::make_unique<MultiFab>(ba2d, S_old.DistributionMap(), 1, 0);
         fire_surface_precip_accum_k0(*precip_accum_k0, precip_sources, geom.Domain().smallEnd(2));
     }
@@ -170,21 +224,25 @@ FireCoupler::advance (Real time, Real dt,
         amrex::Print() << "[FIRE DEBUG] Fire advance using " << mode << " wind at t="
                        << time << ", dt=" << dt << std::endl;
     }
-    const FireForcing forcing{time, dt,
-                              post_dycore ? xvel_new : xvel_old,
-                              post_dycore ? yvel_new : yvel_old,
-                              z_phys_cc, T_atm_k0, RH_atm_k0, precip_accum_k0.get()};
-    m_engine->advance(forcing);
+    FireForcing forcing{time, dt,
+                        post_dycore ? xvel_new : xvel_old,
+                        post_dycore ? yvel_new : yvel_old,
+                        z_phys_cc};
+    if (inputs & FireInput_VerticalVel) { forcing.zvel = post_dycore ? &zvel_new : &zvel_old; }
+    forcing.T_k0            = T_atm_k0.get();
+    forcing.RH_k0           = RH_atm_k0.get();
+    forcing.precip_accum_k0 = precip_accum_k0.get();
+    ActiveModel().Advance(forcing);
 
     // Store the fire flux of this step for injection at the next step via the
-    // Runge-Kutta source term (add_sources). This applies in both lagged and
+    // Runge-Kutta source term (AddSources). This applies in both lagged and
     // synchronous modes; in passive mode the buffer keeps its zero unless the
     // smoke tracer needs it.
-    update_flux_buffer(geom);
+    UpdateFluxBuffer(geom);
 }
 
 void
-FireCoupler::update_flux_buffer (const Geometry& geom_atm)
+FireModel::UpdateFluxBuffer (const Geometry& geom_atm)
 {
     if (!m_params.injects_flux() && !m_params.smoke_enable) {
         if (m_params.fire_debug) {
@@ -194,26 +252,26 @@ FireCoupler::update_flux_buffer (const Geometry& geom_atm)
     }
 
     if (!m_Q_atm_prev) { return; }
-    FireFluxes fluxes;
-    m_engine->fill_fluxes(fluxes);
-    if (!fluxes.sensible) {
+    const MultiFab* sensible = ActiveModel().FireDataPtr(FireVar::sensible_flux);
+    const MultiFab* latent   = ActiveModel().FireDataPtr(FireVar::latent_flux);
+    if (!sensible) {
         // No flux this step: last step's must not be injected again
         m_Q_atm_prev->setVal(0.0_rt);
         m_Q_lat_atm_prev->setVal(0.0_rt);
         return;
     }
 
-    coarsen_fire_flux_to_atm(*m_Q_atm_prev, *fluxes.sensible, geom_atm, m_fg);
+    coarsen_fire_flux_to_atm(*m_Q_atm_prev, *sensible, geom_atm, m_fg);
     if (m_params.fire_debug) {
         amrex::Print() << "[FIRE DEBUG] Sensible flux to the atmosphere: max " << m_Q_atm_prev->max(0)
-                       << " W/m2" << fluxes.debug_note << std::endl;
+                       << " W/m2" << std::endl;
     }
 
-    if (m_params.inject_latent && fluxes.latent) {
-        coarsen_fire_flux_to_atm(*m_Q_lat_atm_prev, *fluxes.latent, geom_atm, m_fg);
+    if (m_params.inject_latent && latent) {
+        coarsen_fire_flux_to_atm(*m_Q_lat_atm_prev, *latent, geom_atm, m_fg);
     } else {
         if (m_params.fire_debug && m_params.injects_flux()) {
-            amrex::Print() << "[FIRE DEBUG] Skipping latent heat injection (inject_latent=false or the engine reports no latent flux)" << std::endl;
+            amrex::Print() << "[FIRE DEBUG] Skipping latent heat injection (inject_latent=false or the model reports no latent flux)" << std::endl;
         }
         m_Q_lat_atm_prev->setVal(0.0_rt);
     }
@@ -228,15 +286,18 @@ FireCoupler::update_flux_buffer (const Geometry& geom_atm)
 }
 
 void
-FireCoupler::add_sources (MultiFab& cc_source,
-                          const MultiFab& S_old,
-                          const MultiFab& z_phys_cc,
-                          const MultiFab* z_phys_nd,
-                          const Geometry& geom,
-                          bool has_moisture,
-                          int step)
+FireModel::AddSources (int lev,
+                       MultiFab& cc_source,
+                       const MultiFab& S_old,
+                       const MultiFab& z_phys_cc,
+                       const MultiFab* z_phys_nd,
+                       const Geometry& geom,
+                       bool has_moisture,
+                       int step)
 {
-    // Heat and vapour, with the WRF-Fire profile (ERF_FireAtmCoupling.H)
+    if (lev != m_lev) { return; }
+
+    // Heat and vapour, with the WRF-Fire profile (Coupling/ERF_FireAtmInjection.H)
     if (m_params.injects_flux() && m_Q_atm_prev && m_params.fire_atm_feedback > 0.0_rt) {
         if (m_params.fire_debug) {
             amrex::Print() << "[FIRE DEBUG] Applying fire coupling to atmosphere (coupling_type="
@@ -247,10 +308,6 @@ FireCoupler::add_sources (MultiFab& cc_source,
         const MultiFab* Q_lat_ptr = (m_params.inject_latent && has_moisture)
             ? m_Q_lat_atm_prev.get() : nullptr;
 
-        // Pass fire_debug so apply_fire_tendency_to_cc_source prints tendency diagnostics.
-        // With fire_debug=true you will see per-RK-stage output:
-        //   [FIRE COUPLING] Q_atm_max=...  alfg=...
-        //   [FIRE COUPLING] RhoTheta tendency sum=...  max=...  expected_surface_max=...
         apply_fire_tendency_to_cc_source(
             cc_source,
             *m_Q_atm_prev,
@@ -264,15 +321,15 @@ FireCoupler::add_sources (MultiFab& cc_source,
             has_moisture,
             m_params.fire_debug,
             m_params.source_mode == "add",
-            m_engine->heat_open_fraction_atm(),
-            m_engine->roof_height_atm(),
+            ActiveModel().FireDataPtr(FireVar::open_fraction_atm),
+            ActiveModel().FireDataPtr(FireVar::roof_height_atm),
             m_params.heat_open_fraction,
             m_params.heat_tendency_density,
             m_params.heat_tendency_exner);
     }
 
     // The smoke tracer, after the heat: proportional to the fuel burnt, which
-    // the engine's heat per kilogram recovers from the lagged sensible flux
+    // the model's heat per kilogram recovers from the lagged sensible flux
     if (m_params.smoke_enable && m_Q_atm_prev) {
         inject_smoke_from_fire(
             cc_source,
@@ -280,7 +337,7 @@ FireCoupler::add_sources (MultiFab& cc_source,
             z_phys_nd,
             geom,
             m_params.smoke_emission_factor,
-            m_engine->smoke_heat_per_kg(),
+            ActiveModel().SmokeHeatPerKg(),
             RhoSmoke_comp,
             m_params.fire_debug,
             step);
@@ -288,10 +345,29 @@ FireCoupler::add_sources (MultiFab& cc_source,
 }
 
 void
-FireCoupler::write_checkpoint (const std::string& checkpointname) const
+FireModel::WritePlotfile (const std::string& prefix, Real time, int step) const
 {
-    // The engine's own state first, as read_checkpoint restores it
-    m_engine->write_checkpoint(checkpointname);
+    if (m_lev < 0) { return; }
+    ActiveModel().WritePlotfile(prefix, time, step);
+}
+
+void
+FireModel::WriteCheckpoint (const std::string& checkpointname) const
+{
+    if (m_lev < 0) { return; }
+
+    // The model's own state first, as ReadCheckpoint restores it
+    if (ActiveModel().SupportsRestart()) {
+        ActiveModel().WriteCheckpoint(checkpointname);
+    } else {
+        static bool warned = false;
+        if (!warned) {
+            amrex::Print() << "[FIRE] WARNING: the fire model (" << ActiveModel().Name()
+                           << ") does not save its state: a restart from this checkpoint "
+                           << "with the fire running will stop\n";
+            warned = true;
+        }
+    }
 
     // The lagged fluxes injected into the atmosphere on the next step. Without
     // them the first step after a restart injects no fire heat at all.
@@ -305,9 +381,9 @@ FireCoupler::write_checkpoint (const std::string& checkpointname) const
 }
 
 std::string
-FireCoupler::checkpoint_mismatch (int chk_lev, const Box& chk_region) const
+FireModel::CheckpointMismatch (int chk_lev, const Box& chk_region) const
 {
-    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(m_Q_atm_prev, "[FIRE] FireCoupler: set_fire_grid() before the checkpoint");
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(m_Q_atm_prev, "[FIRE] FireModel: SetFireGrid() before the checkpoint");
     // The fluxes cover the columns of the level's boxes, which form the fire
     // region (verify_fire_prerequisites, check 7b)
     const Box run_region = m_Q_atm_prev->boxArray().minimalBox();
@@ -320,12 +396,18 @@ FireCoupler::checkpoint_mismatch (int chk_lev, const Box& chk_region) const
 }
 
 void
-FireCoupler::read_checkpoint (const std::string& restart_chkfile, int max_level, int step)
+FireModel::ReadCheckpoint (const std::string& restart_chkfile, int max_level, int step)
 {
-    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(m_Q_atm_prev, "[FIRE] FireCoupler: set_fire_grid() before the checkpoint");
-    // The engine first: it may check, naming its own fields, that the
+    AMREX_ALWAYS_ASSERT_WITH_MESSAGE(m_Q_atm_prev, "[FIRE] FireModel: SetFireGrid() before the checkpoint");
+    if (!ActiveModel().SupportsRestart()) {
+        Abort(std::string("[FIRE] The fire model (") + ActiveModel().Name() + ") does not support "
+              "restart: its state is not in the checkpoint " + restart_chkfile
+              + ". Start the run from its initial conditions.");
+    }
+
+    // The model first: it may check, naming its own fields, that the
     // checkpoint's fire grid sits on this level and region
-    m_engine->read_checkpoint(restart_chkfile, max_level, step);
+    ActiveModel().ReadCheckpoint(restart_chkfile, step);
 
     // The lagged fluxes, on the level of the fire grid. A checkpoint without them
     // (written with no fire running): the buffers keep their zero, said once.
@@ -345,12 +427,11 @@ FireCoupler::read_checkpoint (const std::string& restart_chkfile, int max_level,
         amrex::Print() << "[FIRE] Checkpoint has no lagged fire fluxes; the first restarted step injects none.\n";
         return;
     }
-    // Whatever the engine: the fluxes belong to this run's fire grid, on its
-    // level and over its region (an engine may have checked its own fields
-    // already; this check holds whatever the engine)
+    // Whatever the model: the fluxes belong to this run's fire grid, on its
+    // level and over its region
     const Box chk_region = VisMF(MultiFabFileFullPrefix(chk_lev, restart_chkfile, "Level_", "FireQAtmPrev"))
                                .boxArray().minimalBox();
-    if (const std::string why = checkpoint_mismatch(chk_lev, chk_region); !why.empty()) {
+    if (const std::string why = CheckpointMismatch(chk_lev, chk_region); !why.empty()) {
         amrex::Abort("[FIRE] The checkpoint " + restart_chkfile + " " + why);
     }
     for (const auto& [mf, name] : {std::pair<MultiFab*, const char*>{m_Q_atm_prev.get(), "FireQAtmPrev"},
@@ -368,7 +449,7 @@ FireCoupler::read_checkpoint (const std::string& restart_chkfile, int max_level,
         }
         VisMF::Read(*mf, MultiFabFileFullPrefix(m_lev, restart_chkfile, "Level_", name));
         // VisMF restores the valid cells (a checkpoint may hold no ghost
-        // columns), so refill the ghosts the way update_flux_buffer() does.
+        // columns), so refill the ghosts the way UpdateFluxBuffer() does.
         fire_fill_boundary(*mf, m_geom_atm);
     }
 }

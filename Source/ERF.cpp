@@ -32,7 +32,6 @@
 
 #ifdef ERF_ENABLE_FIRE
 #include "ERF_FirePrerequisites.H"
-#include "ERF_FireEngineFactory.H"
 #endif
 
 using namespace amrex;
@@ -167,9 +166,9 @@ ERF::Evolve ()
 
     // Write fire output at time 0 (initial condition)
 #ifdef ERF_ENABLE_FIRE
-    if (m_fire_coupler && istep[0] == 0 && (m_fire_plot_int > 0 || m_fire_plot_per > zero)) {
-        m_fire_coupler->engine().write_plotfile(m_fire_plot_file, cur_time, istep[0]);
-        if (m_fire_coupler->params().fire_debug) {
+    if (fire_model.HasModel() && istep[0] == 0 && (m_fire_plot_int > 0 || m_fire_plot_per > zero)) {
+        fire_model.WritePlotfile(m_fire_plot_file, cur_time, istep[0]);
+        if (fire_model.Params().fire_debug) {
             amrex::Print() << "[FIRE] Initial fire output written at time 0" << std::endl;
         }
     }
@@ -306,9 +305,9 @@ ERF::WriteAtIntermediateTime (int step, double cur_time)
     }
 
 #ifdef ERF_ENABLE_FIRE
-    if (m_fire_coupler && (m_fire_plot_int > 0 || m_fire_plot_per > zero)) {
+    if (fire_model.HasModel() && (m_fire_plot_int > 0 || m_fire_plot_per > zero)) {
         if (writeNow(cur_time, step+1, m_fire_plot_int, m_fire_plot_per, dt[0], last_fire_plot_time)) {
-            m_fire_coupler->engine().write_plotfile(m_fire_plot_file, cur_time, step+1);
+            fire_model.WritePlotfile(m_fire_plot_file, cur_time, step+1);
             if (m_fire_plot_per > zero) {last_fire_plot_time += m_fire_plot_per;}
         }
     }
@@ -1603,7 +1602,7 @@ ERF::InitData_post ()
     // own prerequisite checks run there), and ERF::Advance samples Theta_prim,
     // which is only allocated with a surface layer. Any other bottom boundary
     // would skip both and crash on the first step, so stop here instead.
-    if (m_fire_coupler &&
+    if (fire_model.HasModel() &&
         phys_bc_type[Orientation(Direction::z,Orientation::low)] != ERF_BC::surface_layer) {
         Abort("[FIRE] The fire coupling requires a surface layer at the bottom boundary: "
               "set zlo.type = \"surface_layer\" with erf.most.z0 and a diffusion choice "
@@ -2021,35 +2020,35 @@ ERF::InitData_post ()
         ReadCheckpointFileSurfaceLayer();
     }
 
-    // Initialize the fire coupling and its engine once every surface layer
-    // exists (on a restart, after their fields are restored), on the level the
-    // fire grid refines: erf.fire.anchor_level, the finest level when unset
-    // (level 0 on a single-level run). This runs on a clean start and on a
-    // restart alike: on a restart the fields are allocated and set up from the
-    // inputs here, then overwritten from the checkpoint by
-    // FireCoupler::read_checkpoint() (the engine's state, then the lagged fluxes).
+    // Initialize the fire model once every surface layer exists (on a restart,
+    // after their fields are restored), on the level the fire grid refines:
+    // erf.fire.anchor_level, the finest level when unset (level 0 on a
+    // single-level run). This runs on a clean start and on a restart alike: on
+    // a restart the fields are allocated and set up from the inputs here, then
+    // overwritten from the checkpoint by FireModel::ReadCheckpoint() (the
+    // model's state, then the lagged fluxes).
 #ifdef ERF_ENABLE_FIRE
     // z_phys_nd is allocated on every level, flat terrain included.
-    if (m_fire_coupler) {
-        const int fire_lev = fire_anchor_level(m_fire_coupler->params().anchor_level, finest_level);
-        m_fire_coupler->initialize(*this, fire_lev, m_SurfaceLayer[Orientation::zlo()].get(), z_phys_nd[fire_lev].get());
-        // An engine that takes the rain per column needs the microphysics
+    if (fire_model.HasModel()) {
+        const int fire_lev = fire_anchor_level(fire_model.Params().anchor_level, finest_level);
+        // max_step counts level-0 steps, and the fire takes one step per step
+        // of its own level.
+        int fire_steps_per_coarse_step = 1;
+        for (int l = 1; l <= fire_lev; ++l) { fire_steps_per_coarse_step *= nsubsteps[l]; }
+        fire_model.Init(*this, fire_lev, m_SurfaceLayer[Orientation::zlo()].get(), *z_phys_nd[fire_lev],
+                        stop_time, max_step, fire_steps_per_coarse_step, restart_chkfile != "");
+        // A model that takes the rain per column needs the microphysics
         // accumulators of the fire grid's level, which exist now that every
         // level is built.
-        if (m_fire_coupler->engine().wants_surface_precip()) {
-            verify_fire_precip_source(m_fire_coupler->engine().name(),
+        if (fire_model.Model(fire_lev).RequestedInputs() & FireInput_SurfacePrecip) {
+            verify_fire_precip_source(fire_model.Model(fire_lev).Name(),
                                       micro ? micro->Get_Surface_Precip_Accumulation_Ptrs(fire_lev)
                                             : SurfacePrecipAccumulationSources{});
         }
-        // The engine's own start-up once the run's end is known. max_step counts
-        // level-0 steps, and the fire takes one step per step of its own level.
-        int fire_steps_per_coarse_step = 1;
-        for (int l = 1; l <= fire_lev; ++l) { fire_steps_per_coarse_step *= nsubsteps[l]; }
-        m_fire_coupler->engine().start_run(stop_time, max_step, fire_steps_per_coarse_step);
 
         if (restart_chkfile != "") {
-            // the engine's state, then the coupling's lagged fluxes
-            m_fire_coupler->read_checkpoint(restart_chkfile, max_level, istep[fire_lev]);
+            // the model's state, then the coupling's lagged fluxes
+            fire_model.ReadCheckpoint(restart_chkfile, max_level, istep[fire_lev]);
         }
     }
 #endif
@@ -3033,27 +3032,39 @@ ERF::initializeMicrophysics (const int& a_nlevsmax /*!< number of AMR levels */)
 }
 
 void
-ERF::initializeFire (const int& /*a_nlevsmax*/ /*!< number of AMR levels */)
+ERF::initializeFire (const int& a_nlevsmax /*!< number of AMR levels */)
 {
 #ifndef ERF_ENABLE_FIRE
-    {   // a fire deck on a build without the module would run as plain ERF, silently
-        amrex::ParmParse pp("erf.fire"); bool want = false; pp.query("enable", want);
-        if (want) { amrex::Abort("erf.fire.enable = true but this executable was built without the fire coupling"
-                                 "; rebuild with it (CMake ERF_ENABLE_FIRE=ON, GNU make USE_FIRE=TRUE)"
-                                 " and a fire engine (see Source/FireCoupling/ERF_FireEngineTemplate.H)"); }
+    amrex::ignore_unused(a_nlevsmax);
+    // a fire deck on a build without the module would run as plain ERF, silently
+    if (solverChoice.fire_type != FireType::None) {
+        amrex::Abort("erf.fire_model = " + amrex::getEnumNameString(solverChoice.fire_type)
+                     + " but this executable was built without the fire coupling; rebuild with it"
+                     " (CMake ERF_ENABLE_FIRE=ON, GNU make USE_FIRE=TRUE) and the fire model"
+                     " (see Source/FireModel/ERF_FireModelTemplate.H)");
+    }
+    {   // the keys that selected the fire before erf.fire_model
+        amrex::ParmParse pp("erf.fire");
+        if (pp.contains("enable") || pp.contains("engine")) {
+            amrex::Abort("erf.fire.enable and erf.fire.engine are no longer read: the fire model is"
+                         " selected with erf.fire_model, and this executable was built without the"
+                         " fire coupling (CMake ERF_ENABLE_FIRE=ON, GNU make USE_FIRE=TRUE)");
+        }
     }
 #else
-    // The coupling inputs, with their range checks; with erf.fire.enable the
-    // engine must be one built into this ERF (ERF_FireEngineFactory.cpp)
-    m_fire_params = FireCouplingParams::read();
-    if (!m_fire_params.enable) { return; }
+    // One NullFire per level, and the coupling inputs with their range checks
+    // (read whether or not a fire runs, so a bad key always stops the run)
+    fire_model.ReSize(a_nlevsmax);
+    fire_model.ReadParameters();
+    if (solverChoice.fire_type == FireType::None) { return; }
+    const FireCouplingParams& params = fire_model.Params();
 
     // Contracts between the fire inputs and the solver inputs, checked here
     // where ReadParameters() has filled solverChoice and before any level is
     // built (the grid-dependent checks are in verify_fire_prerequisites).
     // The smoke tracer is a transported scalar: without the scalar transport
     // its emission is injected and dropped every stage.
-    if (m_fire_params.smoke_enable && !solverChoice.transport_scalar) {
+    if (params.smoke_enable && !solverChoice.transport_scalar) {
         amrex::Abort("[FIRE] erf.fire.smoke_enable = true needs erf.transport_scalar = true"
                      " (the smoke tracer is advected with the scalars)");
     }
@@ -3062,7 +3073,7 @@ ERF::initializeFire (const int& /*a_nlevsmax*/ /*!< number of AMR levels */)
     // every stage, discarding whatever make_sources put there. With no other
     // source that is the intended result; with one it silently drops physics.
     // Make the choice explicit in that case.
-    if (m_fire_params.injects_flux() && !m_fire_params.source_mode_given) {
+    if (params.injects_flux() && !params.source_mode_given) {
         std::string others;
         auto add = [&others] (bool on, const char* what) {
             if (on) { others += (others.empty() ? "" : ", ") + std::string(what); }
@@ -3072,7 +3083,7 @@ ERF::initializeFire (const int& /*a_nlevsmax*/ /*!< number of AMR levels */)
         add(solverChoice.dampingChoice.rayleigh_damp_T,           "erf.rayleigh_damp_T");
         add(solverChoice.custom_rhotheta_forcing,                 "erf.add_custom_rhotheta_forcing");
         add(solverChoice.custom_w_subsidence,                     "erf.add_custom_w_subsidence");
-        add(solverChoice.custom_moisture_forcing && m_fire_params.inject_latent,
+        add(solverChoice.custom_moisture_forcing && params.inject_latent,
                                                                   "erf.add_custom_moisture_forcing");
         // immersed forcing meets the fire tendency only on the slow step; on the
         // acoustic substeps (erf.immersed_forcing_substep, the compressible
@@ -3090,20 +3101,21 @@ ERF::initializeFire (const int& /*a_nlevsmax*/ /*!< number of AMR levels */)
         }
     }
 
-    // The engine erf.fire.engine selects, behind the shared coupling layer.
-    // FireCouplingParams::read() has already rejected a name no engine has;
-    // this is the backstop for an engine listed but not created.
-    std::unique_ptr<FireEngine> engine = make_fire_engine(m_fire_params.engine, m_fire_params);
-    if (!engine) {
-        amrex::Abort("[FIRE] erf.fire.engine = \"" + m_fire_params.engine + "\" is listed in "
-                     "fire_engine_names() but make_fire_engine() does not create it");
+    // The model erf.fire_model selects, as for the land surface models: each
+    // model built into this ERF adds a case here under its build define, e.g.
+    //     case FireType::MyModel: fire_model.SetModel<MyModel>(); break;
+    // (Source/FireModel/ERF_FireModelTemplate.H describes how to add a model)
+    switch (solverChoice.fire_type) {
+    default:
+        amrex::Abort("[FIRE] erf.fire_model = " + amrex::getEnumNameString(solverChoice.fire_type)
+                     + " is not built into this ERF");
     }
-    m_fire_coupler = std::make_unique<FireCoupler>(m_fire_params, std::move(engine));
-    amrex::Print() << "[FIRE] Fire coupling enabled (engine " << m_fire_params.engine
-                   << ", grid_ratio=" << m_fire_params.grid_ratio << ")\n";
-    if (m_fire_params.fire_debug) {
+
+    amrex::Print() << "[FIRE] Fire model " << amrex::getEnumNameString(solverChoice.fire_type)
+                   << " (grid_ratio=" << params.grid_ratio << ")\n";
+    if (params.fire_debug) {
         amrex::Print() << "[FIRE DEBUG] Fire debug mode enabled. Coupling type: "
-                       << m_fire_params.coupling_type << std::endl;
+                       << params.coupling_type << std::endl;
     }
 #endif
 }

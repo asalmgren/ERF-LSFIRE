@@ -22,23 +22,23 @@
 #include <ERF_Constants.H>
 #include <ERF_IndexDefines.H>
 #include <ERF_EOS.H>
-#include "ERF_FireCoupler.H"
-#include "ERF_FireEngine.H"
+#include "ERF_FireModel.H"
+#include "ERF_FireModelBase.H"
 #include "ERF_FireGrid.H"
 #include "ERF_FireCouplingParams.H"
 
 /**
- * @file ERF_GTestFireCoupler.cpp
- * @brief The shared fire coupling with a stand-in engine
+ * @file ERF_GTestFireModel.cpp
+ * @brief The fire model container and its coupling with a stand-in model
  *
- * A stand-in engine plugs into FireCoupler through the FireEngine interface
+ * A stand-in model plugs into the FireModel container through the FireModelBase interface
  * alone and reports a sensible flux linear in x, a uniform latent flux and a
  * heat per kilogram of its own. Every expected value is a closed form, taken
  * from the physics and never from the coupling's code:
  * - the flux averages onto the columns it came from: a linear field's mean
  *   over a column's C x C fire cells is its value at the column centre, also
  *   for a fire region that does not start at the domain corner;
- * - the engine gets the wind before the dycore with lagged coupling and after
+ * - the model gets the wind before the dycore with lagged coupling and after
  *   it with synchronous coupling, and the rain only when it asks for it;
  * - the injected heat integrates to the surface flux: with the density factor
  *   on and feedback f, c_p sum_k d(rho theta)/dt dz = rho f Q (1 - e^{-z_top/alfg}),
@@ -47,8 +47,8 @@
  * - source_mode = add keeps the other sources, overwrite replaces the theta
  *   and vapour sources only;
  * - passive coupling injects no heat (and, without smoke, asks for no flux),
- *   and inject_latent = false drops a latent flux the engine reports;
- * - with erf.fire.heat_open_fraction and an engine that reports an open
+ *   and inject_latent = false drops a latent flux the model reports;
+ * - with erf.fire.heat_open_fraction and a model that reports an open
  *   fraction f and a roof height H above the ground, the column still receives
  *   f Q (1 - e^{-z_top/alfg}), and every cell below the roof receives
  *   f L / (L - (1 - f) B) times what it receives without the option, every cell
@@ -58,8 +58,12 @@
  * - the erf.fire.* coupling keys reach FireCouplingParams unchanged;
  * - a checkpoint restores the lagged fluxes bit for bit, ghosts refilled
  *   (also from a checkpoint written without ghost columns), after the
- *   engine's own restore; a checkpoint without them leaves them at zero, and
- *   one of another level or region is refused.
+ *   model's own restore; a checkpoint without them leaves them at zero, and
+ *   one of another level or region is refused;
+ * - the levels without the fire grid hold a NullFire: advancing and injecting
+ *   there do nothing, and they report no field;
+ * - the optional inputs (air temperature, humidity, vertical wind) reach the
+ *   model only when it requests them.
  */
 
 using namespace amrex;
@@ -70,7 +74,7 @@ constexpr int  NX = 6, NY = 4, NZ = 50, C = 2;
 constexpr Real DXY = 100.0, DZ = 10.0;
 constexpr Real Q0 = 2.0e4, QX = 30.0;      // sensible flux a + b x [W/m2], x in m
 constexpr Real QLAT = 3.0e3;               // latent flux [W/m2]
-constexpr Real HEAT_PER_KG = 1.5e7;        // the engine's heat per kg fuel [J/kg]
+constexpr Real HEAT_PER_KG = 1.5e7;        // the model's heat per kg fuel [J/kg]
 constexpr Real ALFG = 100.0;               // e-folding height [m]: 1 - e^{-5} of the flux stays in the 500 m column
 constexpr Real RHO = 1.15;                 // air density [kg/m3]
 constexpr Real FEEDBACK = 0.5;             // erf.fire.fire_atm_feedback
@@ -106,15 +110,14 @@ void fill_zcc (MultiFab& zcc)
     }
 }
 
-/// A stand-in engine: fixed flux fields, and a record of what it was handed.
-class StandInEngine : public FireEngine
+/// A stand-in model: fixed flux fields, and a record of what it was handed.
+class StandInModel : public FireModelBase
 {
 public:
-    const char* name () const override { return "stand-in"; }
-    void verify_prerequisites (const ERF&, int) override {}
-    void initialize (const ERF&, int, const FireGrid&, const SurfaceLayer*, const MultiFab*) override {}
+    const char* Name () const override { return "stand-in"; }
+    void Init (const FireSetup&) override {}
 
-    /// Allocate and fill the flux fields on the coupler's fire grid (the test calls it).
+    /// Allocate and fill the flux fields on the container's fire grid (the test calls it).
     void set_up (const FireGrid& fg)
     {
         sensible = std::make_unique<MultiFab>(fg.ba, fg.dm, 1, 0);
@@ -123,53 +126,68 @@ public:
         latent->setVal(QLAT);
     }
 
-    void advance (const FireForcing& forcing) override
+    void Advance (const FireForcing& forcing) override
     {
         ++n_advance;
         last_xvel   = &forcing.xvel;
         last_yvel   = &forcing.yvel;
-        // the rain field lives only for the call: record what the test checks
+        last_zvel   = forcing.zvel;
+        // the optional fields live only for the call: record what the test checks
         got_precip  = (forcing.precip_accum_k0 != nullptr);
         if (got_precip) {
             precip_ba    = forcing.precip_accum_k0->boxArray();
             precip_ncomp = forcing.precip_accum_k0->nComp();
         }
+        got_T  = (forcing.T_k0 != nullptr);
+        got_RH = (forcing.RH_k0 != nullptr);
+        if (got_T)  { T_min = forcing.T_k0->min(0);   T_max = forcing.T_k0->max(0); }
+        if (got_RH) { RH_min = forcing.RH_k0->min(0); RH_max = forcing.RH_k0->max(0); }
         last_time   = forcing.time;
         last_dt     = forcing.dt;
     }
-    void fill_fluxes (FireFluxes& fluxes) override
+    const MultiFab* FireDataPtr (const std::string& name) const override
     {
-        ++n_fill;
-        fluxes.sensible = report_sensible ? sensible.get() : nullptr;
-        fluxes.latent   = report_latent ? latent.get() : nullptr;
+        if (name == FireVar::sensible_flux) {
+            ++n_fill;
+            return report_sensible ? sensible.get() : nullptr;
+        }
+        if (name == FireVar::latent_flux)       { return report_latent ? latent.get() : nullptr; }
+        if (name == FireVar::open_fraction_atm) { return open_fraction.get(); }
+        if (name == FireVar::roof_height_atm)   { return roof_height.get(); }
+        return nullptr;
     }
-    Real smoke_heat_per_kg () const override { return HEAT_PER_KG; }
-    bool wants_surface_precip () const override { return wants_precip; }
-    const MultiFab* heat_open_fraction_atm () const override { return open_fraction.get(); }
-    const MultiFab* roof_height_atm () const override { return roof_height.get(); }
-    void start_run (Real, int, int) override {}
-    void write_checkpoint (const std::string&) const override { ++n_write_chk; }
-    void read_checkpoint (const std::string&, int, int step) override
+    unsigned RequestedInputs () const override
+    {
+        return (wants_precip ? FireInput_SurfacePrecip : FireInput_None) | requested;
+    }
+    Real SmokeHeatPerKg () const override { return HEAT_PER_KG; }
+    bool SupportsRestart () const override { return true; }
+    void WriteCheckpoint (const std::string&) const override { ++n_write_chk; }
+    void ReadCheckpoint (const std::string&, int step) override
     {
         ++n_read_chk; read_step = step;
-        // the coupler restores its fluxes after the engine: still zero here
-        if (owner) { flux_at_read = owner->get_Q_atm_prev()->norm0(0, 1, IntVect(5, 5, 0)); }
+        // the container restores its fluxes after the model: still zero here
+        if (owner) { flux_at_read = owner->Get_Q_atm_prev()->norm0(0, 1, IntVect(5, 5, 0)); }
     }
-    void write_plotfile (const std::string&, Real, int) const override {}
+    void WritePlotfile (const std::string&, Real, int) const override {}
 
     std::unique_ptr<MultiFab> sensible, latent;
     std::unique_ptr<MultiFab> open_fraction, roof_height;   ///< on the level's k = 0 slabs, when the test sets them
     bool report_latent = true;
     bool report_sensible = true;
     bool wants_precip  = false;
-    int n_advance = 0, n_fill = 0;
+    unsigned requested = FireInput_None;   ///< further optional inputs the test asks for
+    int n_advance = 0;
+    mutable int n_fill = 0;                ///< sensible fluxes asked for
     mutable int n_write_chk = 0;
     int n_read_chk = 0, read_step = -1;
-    const FireCoupler* owner = nullptr;   ///< the coupler holding this engine, for the order check
+    const FireModel* owner = nullptr;      ///< the container holding this model, for the order check
     Real flux_at_read = -1.0;
     const MultiFab* last_xvel = nullptr;
     const MultiFab* last_yvel = nullptr;
-    bool got_precip = false;
+    const MultiFab* last_zvel = nullptr;
+    bool got_precip = false, got_T = false, got_RH = false;
+    Real T_min = 0, T_max = 0, RH_min = 0, RH_max = 0;
     BoxArray precip_ba;
     int precip_ncomp = 0;
     Real last_time = -1.0, last_dt = -1.0;
@@ -183,7 +201,7 @@ struct Level
     BoxArray ba, ba2d;
     DistributionMapping dm;
     Geometry geom;
-    MultiFab S, xold, yold, xnew, ynew, zcc;
+    MultiFab S, xold, yold, zold, xnew, ynew, znew, zcc;
 };
 
 std::unique_ptr<Level> make_level (bool region)
@@ -211,6 +229,8 @@ std::unique_ptr<Level> make_level (bool region)
     L->yold.define(convert(L->ba, IntVect(0, 1, 0)), L->dm, 1, 1); L->yold.setVal(1.0_rt);
     L->xnew.define(convert(L->ba, IntVect(1, 0, 0)), L->dm, 1, 1); L->xnew.setVal(2.0_rt);
     L->ynew.define(convert(L->ba, IntVect(0, 1, 0)), L->dm, 1, 1); L->ynew.setVal(2.0_rt);
+    L->zold.define(convert(L->ba, IntVect(0, 0, 1)), L->dm, 1, 1); L->zold.setVal(0.0_rt);
+    L->znew.define(convert(L->ba, IntVect(0, 0, 1)), L->dm, 1, 1); L->znew.setVal(0.0_rt);
     L->zcc.define(L->ba, L->dm, 1, 1);
     fill_zcc(L->zcc);
     return L;
@@ -232,31 +252,34 @@ FireCouplingParams coupling (const std::string& type, bool smoke)
     return p;
 }
 
-/// The coupler with the stand-in engine, laid out on the level's fire grid.
-std::unique_ptr<FireCoupler> make_coupler (const Level& lev, const FireCouplingParams& p, StandInEngine*& engine)
+/// The container with the stand-in model on level 0, laid out on the level's fire grid.
+std::unique_ptr<FireModel> make_fire (const Level& lev, const FireCouplingParams& p, StandInModel*& model)
 {
-    auto eng = std::make_unique<StandInEngine>();
-    engine = eng.get();
-    auto cpl = std::make_unique<FireCoupler>(p, std::move(eng));
+    auto m = std::make_unique<StandInModel>();
+    model = m.get();
+    auto cpl = std::make_unique<FireModel>();
+    cpl->ReSize(2);
+    cpl->SetParams(p);
+    cpl->SetModel(std::move(m));
     FireGrid fg = create_fire_grid(lev.ba, lev.dm, lev.geom, C);
-    cpl->set_fire_grid(0, fg, lev.ba, lev.dm, lev.geom);
-    engine->set_up(cpl->fire_grid());
+    cpl->SetFireGrid(0, fg, lev.ba, lev.dm, lev.geom);
+    model->set_up(cpl->GetFireGrid());
     return cpl;
 }
 
-void step (FireCoupler& cpl, Level& lev)
+void step (FireModel& cpl, Level& lev, int at_lev = 0)
 {
-    cpl.advance(10.0_rt, 0.5_rt, lev.S, lev.xold, lev.yold, lev.xnew, lev.ynew, lev.zcc,
-                lev.ba2d, lev.geom, SurfacePrecipAccumulationSources{});
+    cpl.Advance(at_lev, 10.0_rt, 0.5_rt, lev.S, lev.xold, lev.yold, lev.zold, lev.xnew, lev.ynew, lev.znew,
+                lev.zcc, lev.ba2d, lev.geom, SurfacePrecipAccumulationSources{});
 }
 
 /// The cell sources after add_sources on a uniform background
-std::unique_ptr<MultiFab> sources (FireCoupler& cpl, Level& lev, Real background = BACKGROUND,
-                                   const MultiFab* znd = nullptr)
+std::unique_ptr<MultiFab> sources (FireModel& cpl, Level& lev, Real background = BACKGROUND,
+                                   const MultiFab* znd = nullptr, int at_lev = 0)
 {
     auto src = std::make_unique<MultiFab>(lev.ba, lev.dm, NVAR_max, 0);
     src->setVal(background);
-    cpl.add_sources(*src, lev.S, lev.zcc, znd, lev.geom, true, 1);
+    cpl.AddSources(at_lev, *src, lev.S, lev.zcc, znd, lev.geom, true, 1);
     return src;
 }
 
@@ -283,24 +306,24 @@ void FluxesAverageOntoTheColumnsTheyCameFrom ()
 {
     for (bool region : {false, true}) {
         auto lev = make_level(region);
-        StandInEngine* eng = nullptr;
-        auto cpl = make_coupler(*lev, coupling("lagged", false), eng);
-        EXPECT_EQ(cpl->fire_grid().atm_lo[0], region ? 2 : 0);
+        StandInModel* eng = nullptr;
+        auto cpl = make_fire(*lev, coupling("lagged", false), eng);
+        EXPECT_EQ(cpl->GetFireGrid().atm_lo[0], region ? 2 : 0);
         step(*cpl, *lev);
 
         EXPECT_EQ(eng->n_advance, 1);
         EXPECT_EQ(eng->n_fill, 1);
         EXPECT_EQ(eng->last_xvel, &lev->xold) << "lagged coupling hands over the wind before the dycore";
         EXPECT_EQ(eng->last_yvel, &lev->yold);
-        EXPECT_FALSE(eng->got_precip) << "an engine that did not ask gets no rain";
+        EXPECT_FALSE(eng->got_precip) << "a model that did not ask gets no rain";
         EXPECT_EQ(eng->last_time, 10.0_rt);
         EXPECT_EQ(eng->last_dt, 0.5_rt);
 
         // the mean of a + b x over a column's C x C fire cells is a + b x_centre;
         // on the whole periodic domain the 5 ghost columns carry the periodic
         // neighbour's value
-        const MultiFab& Q  = *cpl->get_Q_atm_prev();
-        const MultiFab& QL = *cpl->get_Q_lat_atm_prev();
+        const MultiFab& Q  = *cpl->Get_Q_atm_prev();
+        const MultiFab& QL = *cpl->Get_Q_lat_atm_prev();
         const IntVect ng = region ? IntVect(0, 0, 0) : IntVect(5, 5, 0);
         for (MFIter mfi(Q); mfi.isValid(); ++mfi) {
             const auto q  = Q.const_array(mfi);
@@ -321,31 +344,31 @@ void FluxesAverageOntoTheColumnsTheyCameFrom ()
 void SynchronousCouplingHandsOverTheNewWindAndDropsAVanishedLatentFlux ()
 {
     auto lev = make_level(false);
-    StandInEngine* eng = nullptr;
-    auto cpl = make_coupler(*lev, coupling("synchronous", false), eng);
+    StandInModel* eng = nullptr;
+    auto cpl = make_fire(*lev, coupling("synchronous", false), eng);
     step(*cpl, *lev);
     EXPECT_EQ(eng->last_xvel, &lev->xnew) << "synchronous coupling hands over the wind after the dycore";
     EXPECT_EQ(eng->last_yvel, &lev->ynew);
-    EXPECT_NEAR(cpl->get_Q_lat_atm_prev()->max(0), QLAT, REL * QLAT);
+    EXPECT_NEAR(cpl->Get_Q_lat_atm_prev()->max(0), QLAT, REL * QLAT);
     // the next step reports no latent flux: last step's must not linger
     eng->report_latent = false;
     step(*cpl, *lev);
-    EXPECT_EQ(cpl->get_Q_lat_atm_prev()->norm0(0, 1, IntVect(5, 5, 0)), 0.0_rt);
-    EXPECT_GT(cpl->get_Q_atm_prev()->min(0), 0.0_rt) << "the sensible flux still arrives";
+    EXPECT_EQ(cpl->Get_Q_lat_atm_prev()->norm0(0, 1, IntVect(5, 5, 0)), 0.0_rt);
+    EXPECT_GT(cpl->Get_Q_atm_prev()->min(0), 0.0_rt) << "the sensible flux still arrives";
     // and a step with no flux at all clears both
     eng->report_latent = true;
     step(*cpl, *lev);
     eng->report_sensible = false;
     step(*cpl, *lev);
-    EXPECT_EQ(cpl->get_Q_atm_prev()->norm0(0, 1, IntVect(5, 5, 0)), 0.0_rt) << "no sensible flux this step";
-    EXPECT_EQ(cpl->get_Q_lat_atm_prev()->norm0(0, 1, IntVect(5, 5, 0)), 0.0_rt);
+    EXPECT_EQ(cpl->Get_Q_atm_prev()->norm0(0, 1, IntVect(5, 5, 0)), 0.0_rt) << "no sensible flux this step";
+    EXPECT_EQ(cpl->Get_Q_lat_atm_prev()->norm0(0, 1, IntVect(5, 5, 0)), 0.0_rt);
 }
 
 void TheInjectedHeatIsTheSurfaceFlux ()
 {
     auto lev = make_level(false);
-    StandInEngine* eng = nullptr;
-    auto cpl = make_coupler(*lev, coupling("lagged", true), eng);
+    StandInModel* eng = nullptr;
+    auto cpl = make_fire(*lev, coupling("lagged", true), eng);
     step(*cpl, *lev);
 
     // The magnitudes on a zero background: the tendencies (1e-6 for the vapour
@@ -387,8 +410,8 @@ void TheInjectedHeatIsTheSurfaceFlux ()
     FireCouplingParams p = coupling("lagged", false);
     p.source_mode = "overwrite";
     p.heat_tendency_density = false;
-    StandInEngine* eng2 = nullptr;
-    auto cpl2 = make_coupler(*lev, p, eng2);
+    StandInModel* eng2 = nullptr;
+    auto cpl2 = make_fire(*lev, p, eng2);
     step(*cpl2, *lev);
     auto src2 = sources(*cpl2, *lev);
     for_each_column(*src2, RhoTheta_comp, 0.0_rt, [&] (int i, int j, Real sum, const auto& s) {
@@ -405,22 +428,22 @@ void TheInjectedHeatIsTheSurfaceFlux ()
 void TheOpenFractionKeepsTheColumnEnergyAndThinsTheCellsUnderTheRoof ()
 {
     // two cells under the roof: the roof 2 dz above the ground (the height an
-    // engine reports), so cells 0 and 1 carry the open share alone (with the
+    // model reports), so cells 0 and 1 carry the open share alone (with the
     // first-centre datum used before, the roof sat half a cell higher and cut
     // cell 2)
     constexpr Real F_OPEN = 0.25;
     constexpr Real H_ROOF = 2.0 * DZ;
     auto lev = make_level(false);
 
-    StandInEngine* eng0 = nullptr;
-    auto cpl0 = make_coupler(*lev, coupling("lagged", false), eng0);
+    StandInModel* eng0 = nullptr;
+    auto cpl0 = make_fire(*lev, coupling("lagged", false), eng0);
     step(*cpl0, *lev);
     auto src0 = sources(*cpl0, *lev, 0.0_rt);
 
     FireCouplingParams p = coupling("lagged", false);
     p.heat_open_fraction = true;
-    StandInEngine* eng = nullptr;
-    auto cpl = make_coupler(*lev, p, eng);
+    StandInModel* eng = nullptr;
+    auto cpl = make_fire(*lev, p, eng);
     eng->open_fraction = std::make_unique<MultiFab>(lev->ba2d, lev->dm, 1, 1);
     eng->open_fraction->setVal(F_OPEN);
     eng->roof_height = std::make_unique<MultiFab>(lev->ba2d, lev->dm, 1, 1);
@@ -496,7 +519,7 @@ void TheOpenFractionKeepsTheColumnEnergyAndThinsTheCellsUnderTheRoof ()
     }
     auto src_g = std::make_unique<MultiFab>(lev->ba, lev->dm, NVAR_max, 0);
     src_g->setVal(0.0_rt);
-    cpl->add_sources(*src_g, lev->S, zcc_g, &znd_g, lev->geom, true, 1);
+    cpl->AddSources(0, *src_g, lev->S, zcc_g, &znd_g, lev->geom, true, 1);
     for (MFIter mfi(*src); mfi.isValid(); ++mfi) {
         const auto a = src->const_array(mfi);
         const auto g = src_g->const_array(mfi);
@@ -557,13 +580,13 @@ void TheOpenShareFollowsTheCellFacesOnAStretchedGrid ()
         });
     }
 
-    StandInEngine* eng0 = nullptr;
-    auto cpl0 = make_coupler(*lev, coupling("lagged", false), eng0);
+    StandInModel* eng0 = nullptr;
+    auto cpl0 = make_fire(*lev, coupling("lagged", false), eng0);
     step(*cpl0, *lev);
     FireCouplingParams p = coupling("lagged", false);
     p.heat_open_fraction = true;
-    StandInEngine* eng = nullptr;
-    auto cpl = make_coupler(*lev, p, eng);
+    StandInModel* eng = nullptr;
+    auto cpl = make_fire(*lev, p, eng);
     eng->open_fraction = std::make_unique<MultiFab>(lev->ba2d, lev->dm, 1, 1);
     eng->open_fraction->setVal(F_OPEN);
     eng->roof_height = std::make_unique<MultiFab>(lev->ba2d, lev->dm, 1, 1);
@@ -571,8 +594,8 @@ void TheOpenShareFollowsTheCellFacesOnAStretchedGrid ()
     step(*cpl, *lev);
     MultiFab src0(lev->ba, lev->dm, NVAR_max, 0), src(lev->ba, lev->dm, NVAR_max, 0);
     src0.setVal(0.0_rt); src.setVal(0.0_rt);
-    cpl0->add_sources(src0, lev->S, zcc, &znd, lev->geom, true, 1);
-    cpl->add_sources(src, lev->S, zcc, &znd, lev->geom, true, 1);
+    cpl0->AddSources(0, src0, lev->S, zcc, &znd, lev->geom, true, 1);
+    cpl->AddSources(0, src, lev->S, zcc, &znd, lev->geom, true, 1);
 
     const Real tol_share = (sizeof(Real) == 8) ? 1.0e2 * REL : 1.0e-2;
     for (MFIter mfi(src); mfi.isValid(); ++mfi) {
@@ -615,26 +638,26 @@ void PassiveCouplingInjectsNoHeat ()
     // with the smoke tracer: the flux is still averaged, the smoke injected, the heat not
     {
         auto lev = make_level(false);
-        StandInEngine* eng = nullptr;
-        auto cpl = make_coupler(*lev, coupling("passive", true), eng);
+        StandInModel* eng = nullptr;
+        auto cpl = make_fire(*lev, coupling("passive", true), eng);
         step(*cpl, *lev);
         EXPECT_EQ(eng->n_fill, 1);
-        EXPECT_NEAR(cpl->get_Q_atm_prev()->max(0), flux_at_column(NX - 1), REL * flux_at_column(NX - 1));
+        EXPECT_NEAR(cpl->Get_Q_atm_prev()->max(0), flux_at_column(NX - 1), REL * flux_at_column(NX - 1));
         auto src = sources(*cpl, *lev);
         EXPECT_EQ(src->min(RhoTheta_comp), BACKGROUND);
         EXPECT_EQ(src->max(RhoTheta_comp), BACKGROUND);
         EXPECT_EQ(src->max(RhoQ1_comp), BACKGROUND);
         EXPECT_GT(src->max(RhoSmoke_comp), BACKGROUND);
     }
-    // without it: nothing to ask the engine for, nothing touched
+    // without it: nothing to ask the model for, nothing touched
     {
         auto lev = make_level(false);
-        StandInEngine* eng = nullptr;
-        auto cpl = make_coupler(*lev, coupling("passive", false), eng);
+        StandInModel* eng = nullptr;
+        auto cpl = make_fire(*lev, coupling("passive", false), eng);
         step(*cpl, *lev);
         EXPECT_EQ(eng->n_advance, 1);
         EXPECT_EQ(eng->n_fill, 0) << "no heat and no smoke reach the atmosphere: nothing to ask for";
-        EXPECT_EQ(cpl->get_Q_atm_prev()->norm0(0, 1, IntVect(5, 5, 0)), 0.0_rt);
+        EXPECT_EQ(cpl->Get_Q_atm_prev()->norm0(0, 1, IntVect(5, 5, 0)), 0.0_rt);
         auto src = sources(*cpl, *lev);
         for (int comp : {static_cast<int>(RhoTheta_comp), static_cast<int>(RhoQ1_comp), static_cast<int>(RhoSmoke_comp)}) {
             EXPECT_EQ(src->min(comp), BACKGROUND);
@@ -643,15 +666,15 @@ void PassiveCouplingInjectsNoHeat ()
     }
 }
 
-void InjectLatentOffDropsTheEnginesLatentFlux ()
+void InjectLatentOffDropsTheModelsLatentFlux ()
 {
     auto lev = make_level(false);
     FireCouplingParams p = coupling("lagged", false);
     p.inject_latent = false;
-    StandInEngine* eng = nullptr;
-    auto cpl = make_coupler(*lev, p, eng);
+    StandInModel* eng = nullptr;
+    auto cpl = make_fire(*lev, p, eng);
     step(*cpl, *lev);
-    EXPECT_EQ(cpl->get_Q_lat_atm_prev()->norm0(0, 1, IntVect(5, 5, 0)), 0.0_rt);
+    EXPECT_EQ(cpl->Get_Q_lat_atm_prev()->norm0(0, 1, IntVect(5, 5, 0)), 0.0_rt);
     auto src = sources(*cpl, *lev);
     EXPECT_EQ(src->min(RhoQ1_comp), BACKGROUND);
     EXPECT_EQ(src->max(RhoQ1_comp), BACKGROUND);
@@ -661,8 +684,8 @@ void InjectLatentOffDropsTheEnginesLatentFlux ()
 void TheRainIsHandedOverOnlyWhenAsked ()
 {
     auto lev = make_level(true);
-    StandInEngine* eng = nullptr;
-    auto cpl = make_coupler(*lev, coupling("lagged", false), eng);
+    StandInModel* eng = nullptr;
+    auto cpl = make_fire(*lev, coupling("lagged", false), eng);
     step(*cpl, *lev);
     EXPECT_FALSE(eng->got_precip) << "not asked, not given";
     eng->wants_precip = true;
@@ -688,26 +711,26 @@ std::string make_chk_dir (const std::string& stem)
 void TheCheckpointRestoresTheLaggedFluxes ()
 {
     auto lev = make_level(false);
-    StandInEngine* eng = nullptr;
-    auto cpl = make_coupler(*lev, coupling("lagged", false), eng);
+    StandInModel* eng = nullptr;
+    auto cpl = make_fire(*lev, coupling("lagged", false), eng);
     step(*cpl, *lev);
     const std::string chk = make_chk_dir("fire_coupler_chk");
-    cpl->write_checkpoint(chk);
+    cpl->WriteCheckpoint(chk);
     ParallelDescriptor::Barrier();   // the headers are written by one rank
-    EXPECT_EQ(eng->n_write_chk, 1) << "the coupler writes the engine's state with its own";
+    EXPECT_EQ(eng->n_write_chk, 1) << "the container writes the model's state with its own";
 
-    // a fresh coupler and engine read it back: the engine first, then the fluxes,
+    // a fresh container and model read it back: the model first, then the fluxes,
     // bit for bit on the valid columns and refilled on the ghost columns
-    StandInEngine* eng2 = nullptr;
-    auto cpl2 = make_coupler(*lev, coupling("lagged", false), eng2);
+    StandInModel* eng2 = nullptr;
+    auto cpl2 = make_fire(*lev, coupling("lagged", false), eng2);
     eng2->owner = cpl2.get();
-    cpl2->read_checkpoint(chk, 0, 7);
+    cpl2->ReadCheckpoint(chk, 0, 7);
     EXPECT_EQ(eng2->n_read_chk, 1);
-    EXPECT_EQ(eng2->flux_at_read, 0.0_rt) << "the engine is restored before the lagged fluxes";
-    EXPECT_EQ(eng2->read_step, 7) << "the engine gets the step of its level";
+    EXPECT_EQ(eng2->flux_at_read, 0.0_rt) << "the model is restored before the lagged fluxes";
+    EXPECT_EQ(eng2->read_step, 7) << "the model gets the step of its level";
     for (int which : {0, 1}) {
-        const MultiFab& a = which ? *cpl->get_Q_lat_atm_prev() : *cpl->get_Q_atm_prev();
-        const MultiFab& b = which ? *cpl2->get_Q_lat_atm_prev() : *cpl2->get_Q_atm_prev();
+        const MultiFab& a = which ? *cpl->Get_Q_lat_atm_prev() : *cpl->Get_Q_atm_prev();
+        const MultiFab& b = which ? *cpl2->Get_Q_lat_atm_prev() : *cpl2->Get_Q_atm_prev();
         MultiFab d(a.boxArray(), a.DistributionMap(), 1, a.nGrowVect());
         MultiFab::Copy(d, a, 0, 0, 1, a.nGrowVect());
         MultiFab::Subtract(d, b, 0, 0, 1, a.nGrowVect());
@@ -720,18 +743,18 @@ void TheCheckpointRestoresTheLaggedFluxes ()
     // excess reads them) to the values the run itself had
     const std::string old = make_chk_dir("fire_coupler_chk_noghost");
     for (int which : {0, 1}) {
-        const MultiFab& a = which ? *cpl->get_Q_lat_atm_prev() : *cpl->get_Q_atm_prev();
+        const MultiFab& a = which ? *cpl->Get_Q_lat_atm_prev() : *cpl->Get_Q_atm_prev();
         MultiFab valid(a.boxArray(), a.DistributionMap(), 1, 0);
         MultiFab::Copy(valid, a, 0, 0, 1, 0);
         VisMF::Write(valid, MultiFabFileFullPrefix(0, old, "Level_", which ? "FireQLatAtmPrev" : "FireQAtmPrev"));
     }
     ParallelDescriptor::Barrier();
-    StandInEngine* eng4 = nullptr;
-    auto cpl4 = make_coupler(*lev, coupling("lagged", false), eng4);
-    cpl4->read_checkpoint(old, 0, 0);
+    StandInModel* eng4 = nullptr;
+    auto cpl4 = make_fire(*lev, coupling("lagged", false), eng4);
+    cpl4->ReadCheckpoint(old, 0, 0);
     for (int which : {0, 1}) {
-        const MultiFab& a = which ? *cpl->get_Q_lat_atm_prev()  : *cpl->get_Q_atm_prev();
-        const MultiFab& b = which ? *cpl4->get_Q_lat_atm_prev() : *cpl4->get_Q_atm_prev();
+        const MultiFab& a = which ? *cpl->Get_Q_lat_atm_prev()  : *cpl->Get_Q_atm_prev();
+        const MultiFab& b = which ? *cpl4->Get_Q_lat_atm_prev() : *cpl4->Get_Q_atm_prev();
         MultiFab d(a.boxArray(), a.DistributionMap(), 1, a.nGrowVect());
         MultiFab::Copy(d, a, 0, 0, 1, a.nGrowVect());
         MultiFab::Subtract(d, b, 0, 0, 1, a.nGrowVect());
@@ -741,11 +764,11 @@ void TheCheckpointRestoresTheLaggedFluxes ()
 
     // a checkpoint without them (no fire state): the fluxes stay zero
     const std::string empty = make_chk_dir("fire_coupler_chk_empty");
-    StandInEngine* eng3 = nullptr;
-    auto cpl3 = make_coupler(*lev, coupling("lagged", false), eng3);
-    cpl3->read_checkpoint(empty, 0, 0);
-    EXPECT_EQ(eng3->n_read_chk, 1) << "the engine is asked whatever the coupling finds";
-    EXPECT_EQ(cpl3->get_Q_atm_prev()->norm0(0, 1, IntVect(5, 5, 0)), 0.0_rt);
+    StandInModel* eng3 = nullptr;
+    auto cpl3 = make_fire(*lev, coupling("lagged", false), eng3);
+    cpl3->ReadCheckpoint(empty, 0, 0);
+    EXPECT_EQ(eng3->n_read_chk, 1) << "the model is asked whatever the coupling finds";
+    EXPECT_EQ(cpl3->Get_Q_atm_prev()->norm0(0, 1, IntVect(5, 5, 0)), 0.0_rt);
 
     if (ParallelDescriptor::IOProcessor()) {
         FileSystem::RemoveAll(chk);
@@ -757,16 +780,66 @@ void TheCheckpointRestoresTheLaggedFluxes ()
 
 void ACheckpointOfAnotherFireGridIsRefused ()
 {
-    // the coupler on the region of columns 2-5; its own region and level pass
+    // the container on the region of columns 2-5; its own region and level pass
     auto lev = make_level(true);
-    StandInEngine* eng = nullptr;
-    auto cpl = make_coupler(*lev, coupling("lagged", false), eng);
+    StandInModel* eng = nullptr;
+    auto cpl = make_fire(*lev, coupling("lagged", false), eng);
     const Box own(IntVect(2, 0, 0), IntVect(5, NY - 1, 0));
-    EXPECT_TRUE(cpl->checkpoint_mismatch(0, own).empty());
+    EXPECT_TRUE(cpl->CheckpointMismatch(0, own).empty());
     // fluxes of the whole domain, or of the same columns on another level, do not
     const Box whole(IntVect(0, 0, 0), IntVect(NX - 1, NY - 1, 0));
-    EXPECT_NE(cpl->checkpoint_mismatch(0, whole).find("columns"), std::string::npos);
-    EXPECT_NE(cpl->checkpoint_mismatch(1, own).find("on level 1"), std::string::npos);
+    EXPECT_NE(cpl->CheckpointMismatch(0, whole).find("columns"), std::string::npos);
+    EXPECT_NE(cpl->CheckpointMismatch(1, own).find("on level 1"), std::string::npos);
+}
+
+void OtherLevelsHoldANullFire ()
+{
+    // the model sits on level 0; level 1 holds a NullFire, so every per-level
+    // call there is a no-op and reports no field
+    auto lev = make_level(false);
+    StandInModel* eng = nullptr;
+    auto cpl = make_fire(*lev, coupling("lagged", false), eng);
+    EXPECT_TRUE(cpl->HasModel());
+    EXPECT_EQ(cpl->Level(), 0);
+    EXPECT_STREQ(cpl->Model(0).Name(), "stand-in");
+    EXPECT_STREQ(cpl->Model(1).Name(), "None");
+
+    step(*cpl, *lev, 1);
+    EXPECT_EQ(eng->n_advance, 0) << "no advance on a level without the fire grid";
+    EXPECT_EQ(cpl->Get_Q_atm_prev()->norm0(0, 1, IntVect(5, 5, 0)), 0.0_rt);
+    step(*cpl, *lev, 0);
+    EXPECT_EQ(eng->n_advance, 1);
+
+    auto src = sources(*cpl, *lev, BACKGROUND, nullptr, 1);
+    EXPECT_EQ(src->min(RhoTheta_comp), BACKGROUND) << "no heat on a level without the fire grid";
+    EXPECT_EQ(src->max(RhoTheta_comp), BACKGROUND);
+
+    EXPECT_EQ(cpl->Get_Data_Ptr(0, FireVar::sensible_flux), eng->sensible.get());
+    EXPECT_EQ(cpl->Get_Data_Ptr(1, FireVar::sensible_flux), nullptr);
+    EXPECT_EQ(cpl->Get_Data_Ptr(0, "no_such_field"), nullptr);
+}
+
+void OptionalInputsOnlyWhenRequested ()
+{
+    auto lev = make_level(false);
+    StandInModel* eng = nullptr;
+    auto cpl = make_fire(*lev, coupling("lagged", false), eng);
+    step(*cpl, *lev);
+    EXPECT_FALSE(eng->got_T)  << "not asked, not computed";
+    EXPECT_FALSE(eng->got_RH);
+    EXPECT_EQ(eng->last_zvel, nullptr);
+
+    eng->requested = FireInput_AirTemp | FireInput_RelHum | FireInput_VerticalVel;
+    step(*cpl, *lev);
+    ASSERT_TRUE(eng->got_T);
+    ASSERT_TRUE(eng->got_RH);
+    // a uniform dry state at 900 hPa: one air temperature, no humidity
+    EXPECT_EQ(eng->T_min, eng->T_max);
+    EXPECT_GT(eng->T_min, 200.0_rt);
+    EXPECT_LT(eng->T_min, 350.0_rt);
+    EXPECT_EQ(eng->RH_min, 0.0_rt);
+    EXPECT_EQ(eng->RH_max, 0.0_rt);
+    EXPECT_EQ(eng->last_zvel, &lev->zold) << "lagged coupling: the vertical wind before the dycore";
 }
 
 /// Keys added to erf.fire for one test and removed on exit
@@ -806,9 +879,6 @@ void TheFireInputsReachTheCoupling ()
         deck.add("smoke_emission_factor", 0.05);
         deck.add("fire_debug", true);
         const FireCouplingParams c = FireCouplingParams::read();
-        // no engine is built into this ERF, so the engine name stays empty
-        EXPECT_FALSE(c.enable);
-        EXPECT_EQ(c.engine, "");
         EXPECT_EQ(c.grid_ratio, 4);
         EXPECT_EQ(c.anchor_level, 0);
         EXPECT_EQ(c.coupling_type, "synchronous");
@@ -830,23 +900,25 @@ void TheFireInputsReachTheCoupling ()
 
 } // namespace
 
-TEST(FireCoupler, FluxesAverageOntoTheColumnsTheyCameFrom)        { FluxesAverageOntoTheColumnsTheyCameFrom(); }
-TEST(FireCoupler, SynchronousCouplingHandsOverTheNewWindAndDropsVanishedFluxes)
+TEST(FireModel, FluxesAverageOntoTheColumnsTheyCameFrom)        { FluxesAverageOntoTheColumnsTheyCameFrom(); }
+TEST(FireModel, SynchronousCouplingHandsOverTheNewWindAndDropsVanishedFluxes)
 {
     SynchronousCouplingHandsOverTheNewWindAndDropsAVanishedLatentFlux();
 }
-TEST(FireCoupler, TheInjectedHeatIsTheSurfaceFlux)                 { TheInjectedHeatIsTheSurfaceFlux(); }
-TEST(FireCoupler, PassiveCouplingInjectsNoHeat)                    { PassiveCouplingInjectsNoHeat(); }
-TEST(FireCoupler, TheOpenFractionKeepsTheColumnEnergyAndThinsTheCellsUnderTheRoof)
+TEST(FireModel, TheInjectedHeatIsTheSurfaceFlux)                 { TheInjectedHeatIsTheSurfaceFlux(); }
+TEST(FireModel, PassiveCouplingInjectsNoHeat)                    { PassiveCouplingInjectsNoHeat(); }
+TEST(FireModel, TheOpenFractionKeepsTheColumnEnergyAndThinsTheCellsUnderTheRoof)
 {
     TheOpenFractionKeepsTheColumnEnergyAndThinsTheCellsUnderTheRoof();
 }
-TEST(FireCoupler, TheOpenShareFollowsTheCellFacesOnAStretchedGrid)
+TEST(FireModel, TheOpenShareFollowsTheCellFacesOnAStretchedGrid)
 {
     TheOpenShareFollowsTheCellFacesOnAStretchedGrid();
 }
-TEST(FireCoupler, InjectLatentOffDropsTheEnginesLatentFlux)        { InjectLatentOffDropsTheEnginesLatentFlux(); }
-TEST(FireCoupler, TheRainIsHandedOverOnlyWhenAsked)                { TheRainIsHandedOverOnlyWhenAsked(); }
-TEST(FireCoupler, TheFireInputsReachTheCoupling)                   { TheFireInputsReachTheCoupling(); }
-TEST(FireCoupler, TheCheckpointRestoresTheLaggedFluxes)            { TheCheckpointRestoresTheLaggedFluxes(); }
-TEST(FireCoupler, ACheckpointOfAnotherFireGridIsRefused)           { ACheckpointOfAnotherFireGridIsRefused(); }
+TEST(FireModel, InjectLatentOffDropsTheModelsLatentFlux)        { InjectLatentOffDropsTheModelsLatentFlux(); }
+TEST(FireModel, TheRainIsHandedOverOnlyWhenAsked)                { TheRainIsHandedOverOnlyWhenAsked(); }
+TEST(FireModel, TheFireInputsReachTheCoupling)                   { TheFireInputsReachTheCoupling(); }
+TEST(FireModel, TheCheckpointRestoresTheLaggedFluxes)            { TheCheckpointRestoresTheLaggedFluxes(); }
+TEST(FireModel, ACheckpointOfAnotherFireGridIsRefused)           { ACheckpointOfAnotherFireGridIsRefused(); }
+TEST(FireModel, OtherLevelsHoldANullFire)                         { OtherLevelsHoldANullFire(); }
+TEST(FireModel, OptionalInputsOnlyWhenRequested)                  { OptionalInputsOnlyWhenRequested(); }

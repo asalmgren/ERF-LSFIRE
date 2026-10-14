@@ -258,9 +258,9 @@ Test configuration options
    * - ``ERF_ENABLE_PARTICLES``
      - Enables particle code and tests that depend on it.
    * - ``ERF_ENABLE_FIRE``
-     - Enables the fire coupling and its tests (``FireCoupler``, ``FireAnchorLevel``,
+     - Enables the fire model container and its tests (``FireModel``, ``FireAnchorLevel``,
        ``FirePrecip``, ``ExnerTendency``, ``HeatInjection``, ``SmokeInjection``, and
-       ``FireCouplingGTests_FpeTraps``, which reruns them with floating-point traps armed).
+       ``FireModelGTests_FpeTraps``, which reruns them with floating-point traps armed).
    * - ``ERF_PARTICLES_PRECISION``
      - Selects particle precision when particles are enabled.
 

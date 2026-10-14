@@ -1,0 +1,8 @@
+CEXE_sources += ERF_FireCouplingParams.cpp
+CEXE_sources += ERF_FireGrid.cpp
+CEXE_sources += ERF_FirePrerequisites.cpp
+
+CEXE_headers += ERF_FireCouplingParams.H
+CEXE_headers += ERF_FireGrid.H
+CEXE_headers += ERF_FirePrerequisites.H
+CEXE_headers += ERF_FireAtmInjection.H

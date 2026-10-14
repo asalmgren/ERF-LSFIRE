@@ -281,7 +281,7 @@ if(ERF_ENABLE_FIRE)
   target_sources(${erf_exe_name} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Fire/ERF_GTestFireAnchorLevel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Fire/ERF_GTestFireAtmInjection.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/Fire/ERF_GTestFireCoupler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Fire/ERF_GTestFireModel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Fire/ERF_GTestFirePrecip.cpp
   )
 endif()
@@ -352,11 +352,11 @@ erf_register_gtest_suite(${erf_exe_name}
 # 0/0 or log(0) raises FE_INVALID/FE_DIVBYZERO and kills the run; the plain
 # unit run never arms the traps and cannot see it.
 if(ERF_ENABLE_FIRE)
-  add_test(NAME FireCouplingGTests_FpeTraps
+  add_test(NAME FireModelGTests_FpeTraps
     COMMAND ${erf_exe_name}
-      --gtest_filter=FireAnchorLevel.*:FireCoupler.*:FirePrecip.*:ExnerTendency.*:HeatInjection.*:SmokeInjection.*
+      --gtest_filter=FireAnchorLevel.*:FireModel.*:FirePrecip.*:ExnerTendency.*:HeatInjection.*:SmokeInjection.*
       amrex.fpe_trap_invalid=1 amrex.fpe_trap_zero=1 amrex.fpe_trap_overflow=1)
-  set_tests_properties(FireCouplingGTests_FpeTraps PROPERTIES LABELS "unit;fire" TIMEOUT 600)
+  set_tests_properties(FireModelGTests_FpeTraps PROPERTIES LABELS "unit;fire" TIMEOUT 600)
 endif()
 
 add_test(NAME erf_unit_tests_shuffle_repeat

@@ -72,7 +72,7 @@
 #include "ERF_LagrangianMicrophysics.H"
 #include "ERF_LandSurface.H"
 #ifdef ERF_ENABLE_FIRE
-#include "ERF_FireCoupler.H"
+#include "ERF_FireModel.H"
 #endif
 #include "ERF_Urban.H"
 #include "ERF_TwoStreamRadiation.H"
@@ -1098,7 +1098,7 @@ private:
     // Initialize the microphysics object
     void initializeMicrophysics (const int&);
 
-    // Initialize the fire coupling and its engine (erf.fire.enable)
+    // Read the fire coupling's inputs and the fire model's selection (erf.fire_model)
     void initializeFire (const int&);
 
 #ifdef ERF_USE_WINDFARM
@@ -2020,9 +2020,8 @@ private:
     amrex::Vector<std::unique_ptr<ForestDrag>> m_forest_drag;
 
 #ifdef ERF_ENABLE_FIRE
-    /// The fire coupling (atmosphere side) and the engine it owns (erf.fire.engine)
-    std::unique_ptr<FireCoupler>      m_fire_coupler = nullptr;
-    FireCouplingParams                m_fire_params;
+    /// The fire model (erf.fire_model) on every level and the coupling to the atmosphere
+    FireModel   fire_model;
     std::string m_fire_plot_file {"plt_fire_"};
     int         m_fire_plot_int  = -1;
     amrex::Real m_fire_plot_per  = -1.0;

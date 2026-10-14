@@ -1,5 +1,5 @@
-#ifndef ERF_FIRE_SMOKE_EMISSION_H
-#define ERF_FIRE_SMOKE_EMISSION_H
+#ifndef ERF_FIRE_SMOKE_H
+#define ERF_FIRE_SMOKE_H
 
 #ifdef ERF_ENABLE_FIRE
 
@@ -24,7 +24,7 @@
  * @param[in]     geom_atm            ATM geometry
  * @param[in]     emission_factor     kg smoke per kg fuel burned [-]
  * @param[in]     heat_of_combustion  J per kg fuel burned [J/kg]; the caller passes
- *                                    FireEngine::smoke_heat_per_kg()
+ *                                    FireModelBase::SmokeHeatPerKg()
  * @param[in]     smoke_comp          Component index in cc_source for smoke
  * @param[in]     fire_debug          Print debug output if true
  * @param[in]     step                Current step for debug output
@@ -41,4 +41,4 @@ void inject_smoke_from_fire(
     int                    step);
 
 #endif // ERF_ENABLE_FIRE
-#endif // ERF_FIRE_SMOKE_EMISSION_H
+#endif // ERF_FIRE_SMOKE_H

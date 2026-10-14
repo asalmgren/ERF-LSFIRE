@@ -61,17 +61,17 @@ int fire_anchor_level(int anchor_level, int finest_level)
     return lev;
 }
 
-void verify_fire_precip_source(const std::string& engine_name,
+void verify_fire_precip_source(const std::string& model_name,
                                const SurfacePrecipAccumulationSources& sources)
 {
     if (surface_precip_has_any_source(sources)) { return; }
     std::string moisture_model = "None";
     ParmParse pp_erf("erf");
     pp_erf.query("moisture_model", moisture_model);
-    Abort("[FIRE] The fire engine \"" + engine_name + "\" takes the rain of every column from the "
+    Abort("[FIRE] The fire model \"" + model_name + "\" takes the rain of every column from the "
           "microphysics surface precipitation accumulators, but erf.moisture_model = \"" + moisture_model
           + "\" provides none (Kessler, SAM, Morrison, WSM6 and WDM6 with precipitation do; Kessler_NoRain, "
-          "SatAdj, MoistNoCondensation and None do not). Choose one of those, or set the engine's inputs so "
+          "SatAdj, MoistNoCondensation and None do not). Choose one of those, or set the model's inputs so "
           "it does not read the rain.");
 }
 
@@ -184,8 +184,8 @@ void verify_fire_prerequisites(const ERF& erf,
     //
     // A fire cell maps back to its atmospheric cell by i_a = i_f / C + atm_lo,
     // with atm_lo the lower corner of the fire region in the level's index space
-    // (FireGrid::atm_lo), in ERF_FireGrid.H, ERF_FireAtmCoupling.H,
-    // ERF_FireWindExtract.cpp, ERF_FireSurfaceHeight.cpp and the engine's own maps; create_fire_grid() takes
+    // (FireGrid::atm_lo), in ERF_FireGrid.H, ERF_FireAtmInjection.H,
+    // ERF_FireWindExtract.cpp, ERF_FireTerrain.cpp and the model's own maps; create_fire_grid() takes
     // the region's physical position from ProbLo plus its index offset from the
     // domain's corner. Every AMReX level has a zero-based domain, so this
     // asserts the convention rather than relying on it silently.

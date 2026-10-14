@@ -5289,18 +5289,17 @@ These inputs configure the atmosphere side of the fire coupling described in
 (``USE_FIRE = TRUE`` with GNU make). The ``erf.fire`` keys are read once at
 start-up by ``FireCouplingParams::read()``, which stops the run on a value
 outside the range given here, naming the key; the three plotfile keys are read
-from ``erf`` with the other output keys. A fire engine reads its own inputs
-besides.
+from ``erf`` with the other output keys, and ``erf.fire_model`` selects the
+fire model. A fire model reads its own inputs besides
+(``erf.fire.<model>.*``).
 
 +------------------------------------------------+------------------------------------------------------------+--------------------------------+------------------------+
 | Parameter                                      | Definition                                                 | Acceptable Values              | Default                |
 +================================================+============================================================+================================+========================+
-| **erf.fire.enable**                            | Run a fire (needs a fire engine built in, see              | Boolean                        | false                  |
-|                                                | :ref:`sec:FireCoupling`)                                   |                                |                        |
-+------------------------------------------------+------------------------------------------------------------+--------------------------------+------------------------+
-| **erf.fire.engine**                            | The fire engine behind the coupling, one of the engines    | String                         | the first built in     |
-|                                                | built in (ERF_FireEngineFactory.cpp); with none built      |                                |                        |
-|                                                | in, setting it stops the run                               |                                |                        |
+| **erf.fire_model**                             | The fire model; a model other than None must be built in   | None, or a model built in      | None                   |
+|                                                | (see :ref:`sec:FireCoupling`). The keys that selected the  |                                |                        |
+|                                                | fire before it, ``erf.fire.enable`` and                    |                                |                        |
+|                                                | ``erf.fire.engine``, stop the run                          |                                |                        |
 +------------------------------------------------+------------------------------------------------------------+--------------------------------+------------------------+
 | **erf.fire.fire_debug**                        | Print per-step coupling diagnostics                        | Boolean                        | false                  |
 +------------------------------------------------+------------------------------------------------------------+--------------------------------+------------------------+
@@ -5346,9 +5345,9 @@ besides.
 | **erf.fire.smoke_emission_factor**             | Smoke mass per unit fuel burned [kg/kg]; needs             | Real >= 0                      | 0.02                   |
 |                                                | ``erf.fire.smoke_enable = true`` (set without it the run   |                                |                        |
 |                                                | stops, or warns when ``smoke_enable = false`` or           |                                |                        |
-|                                                | ``erf.fire.enable = false`` is given)                      |                                |                        |
+|                                                | ``erf.fire_model = None`` is given)                        |                                |                        |
 +------------------------------------------------+------------------------------------------------------------+--------------------------------+------------------------+
-| **erf.fire_plot_file**                         | Prefix of the engine's fire plotfile                       | String                         | ``plt_fire_``          |
+| **erf.fire_plot_file**                         | Prefix of the model's fire plotfile                        | String                         | ``plt_fire_``          |
 +------------------------------------------------+------------------------------------------------------------+--------------------------------+------------------------+
 | **erf.fire_plot_int**                          | Steps between fire plotfiles; <= 0 disables                | Integer                        | -1                     |
 +------------------------------------------------+------------------------------------------------------------+--------------------------------+------------------------+

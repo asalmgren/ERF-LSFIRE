@@ -1,7 +1,7 @@
 #include <ERF_FireCouplingParams.H>
-#include <ERF_FireEngineFactory.H>
 #include <AMReX_ParmParse.H>
 #include <AMReX_Print.H>
+#include <AMReX_String.H>
 
 #include <string>
 #include <vector>
@@ -26,7 +26,14 @@ FireCouplingParams::read ()
         if (!(v >= 0.0)) { fail(std::string("erf.fire.") + key + " must be >= 0, got " + std::to_string(v)); }
     };
 
-    pp.query("enable", c.enable);
+    // erf.fire.enable and erf.fire.engine selected the fire before erf.fire_model did
+    for (const char* k : {"enable", "engine"}) {
+        if (pp.contains(k)) {
+            fail(std::string("erf.fire.") + k + " is no longer read: select the fire model with "
+                 "erf.fire_model (None, or a model built into this ERF)");
+        }
+    }
+
     pp.query("fire_debug", c.fire_debug);
     pp.query("grid_ratio", c.grid_ratio);
     if (c.grid_ratio < 1) {
@@ -36,20 +43,6 @@ FireCouplingParams::read ()
     if (c.anchor_level < -1) {
         fail("erf.fire.anchor_level must be -1 (the finest level) or a level >= 0, got "
              + std::to_string(c.anchor_level));
-    }
-
-    // The engine: one built into this ERF, the first by default
-    const std::vector<std::string> engines = fire_engine_names();
-    if (!engines.empty()) { c.engine = engines.front(); }
-    const bool engine_given = pp.query("engine", c.engine);
-    if (engine_given || c.enable) {
-        if (engines.empty()) {
-            fail(std::string(c.enable ? "erf.fire.enable = true" : "erf.fire.engine is set")
-                 + ", but this ERF has no fire engine built in: Source/FireCoupling holds only the "
-                   "coupling to the atmosphere. Source/FireCoupling/ERF_FireEngineTemplate.H lists what "
-                   "an engine provides and how to add one.");
-        }
-        one_of("engine", c.engine, engines);
     }
 
     pp.query("heat_flux_alfg", c.heat_flux_alfg);
@@ -78,16 +71,19 @@ FireCouplingParams::read ()
     pp.query("smoke_enable", c.smoke_enable);
     pp.query("smoke_emission_factor", c.smoke_emission_factor);
     nonneg("smoke_emission_factor", c.smoke_emission_factor);
-    // A smoke key without the smoke switch: a deck that sets the smoke switch,
-    // or the fire switch, to false explicitly is a variant switching smoke off,
-    // so warn; a deck that set neither forgot the smoke switch, so stop
+    // A smoke key without the smoke switch: a deck that sets the smoke switch
+    // to false, or erf.fire_model to None, explicitly is a variant switching
+    // smoke off, so warn; a deck that set neither forgot the smoke switch, so stop
     if (!c.smoke_enable && pp.contains("smoke_emission_factor")) {
+        std::string fire_model;
+        const bool fire_off = amrex::ParmParse("erf").query("fire_model", fire_model)
+                              && amrex::toLower(fire_model) == "none";
         if (pp.contains("smoke_enable")) {
             amrex::Print() << "[FIRE] WARNING: erf.fire.smoke_emission_factor is ignored with"
                            << " erf.fire.smoke_enable = false\n";
-        } else if (pp.contains("enable") && !c.enable) {
+        } else if (fire_off) {
             amrex::Print() << "[FIRE] WARNING: erf.fire.smoke_emission_factor is ignored with"
-                           << " erf.fire.enable = false\n";
+                           << " erf.fire_model = None\n";
         } else {
             fail("erf.fire.smoke_emission_factor needs erf.fire.smoke_enable = true");
         }

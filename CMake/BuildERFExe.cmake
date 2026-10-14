@@ -379,18 +379,23 @@ function(build_erf_lib erf_lib_name)
   endif()
 
   if(ERF_ENABLE_FIRE)
-    # The fire coupling, atmosphere side, shared by every fire engine
+    # The fire model container and the coupling to the atmosphere, shared by
+    # every fire model (Source/FireModel); each model adds its own directory
     target_sources(${erf_lib_name} PRIVATE
-      ${SRC_DIR}/FireCoupling/ERF_FireCoupler.cpp
-      ${SRC_DIR}/FireCoupling/ERF_FireCouplingParams.cpp
-      ${SRC_DIR}/FireCoupling/ERF_FireEngineFactory.cpp
-      ${SRC_DIR}/FireCoupling/ERF_FireGrid.cpp
-      ${SRC_DIR}/FireCoupling/ERF_FirePrerequisites.cpp
-      ${SRC_DIR}/FireCoupling/ERF_FireWindExtract.cpp
-      ${SRC_DIR}/FireCoupling/ERF_FireSurfaceHeight.cpp
-      ${SRC_DIR}/FireCoupling/ERF_FireSmokeEmission.cpp
+      ${SRC_DIR}/FireModel/ERF_FireModel.cpp
+      ${SRC_DIR}/FireModel/Coupling/ERF_FireCouplingParams.cpp
+      ${SRC_DIR}/FireModel/Coupling/ERF_FireGrid.cpp
+      ${SRC_DIR}/FireModel/Coupling/ERF_FirePrerequisites.cpp
+      ${SRC_DIR}/FireModel/Tools/ERF_FireWindExtract.cpp
+      ${SRC_DIR}/FireModel/Tools/ERF_FireTerrain.cpp
+      ${SRC_DIR}/FireModel/Features/ERF_FireSmoke.cpp
     )
-    target_include_directories(${erf_lib_name} PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/Source/FireCoupling>)
+    target_include_directories(${erf_lib_name} PUBLIC
+      $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/Source/FireModel>
+      $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/Source/FireModel/Null>
+      $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/Source/FireModel/Coupling>
+      $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/Source/FireModel/Tools>
+      $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/Source/FireModel/Features>)
     target_compile_definitions(${erf_lib_name} PUBLIC ERF_ENABLE_FIRE)
   endif()
 

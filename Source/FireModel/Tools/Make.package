@@ -1,0 +1,6 @@
+CEXE_sources += ERF_FireWindExtract.cpp
+CEXE_sources += ERF_FireTerrain.cpp
+
+CEXE_headers += ERF_FireWindExtract.H
+CEXE_headers += ERF_FireTerrain.H
+CEXE_headers += ERF_FireAtmState.H

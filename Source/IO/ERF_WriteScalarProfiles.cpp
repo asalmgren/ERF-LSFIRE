@@ -61,7 +61,7 @@ ERF::sum_integrated_quantities (double time)
         }
     }
 #ifdef ERF_ENABLE_FIRE
-    if (m_fire_coupler) {
+    if (fire_model.HasModel()) {
         smoke_sl = volWgtSumMF(0, vars_new[0][Vars::cons], RhoSmoke_comp, dJ0, mfx0, mfy0, false);
     }
 #endif
@@ -79,7 +79,7 @@ ERF::sum_integrated_quantities (double time)
             }
         }
 #ifdef ERF_ENABLE_FIRE
-        if (m_fire_coupler) {
+        if (fire_model.HasModel()) {
             smoke_ml += volWgtSumMF(lev, vars_new[lev][Vars::cons], RhoSmoke_comp, dJ, mfx, mfy, true);
         }
 #endif
@@ -147,7 +147,7 @@ ERF::sum_integrated_quantities (double time)
            if (solverChoice.transport_scalar) { Print() << " RHO SCALAR = " << scal_sl << '\n'; }
            if (solverChoice.moisture_type != MoistureType::None) { Print() << " RHO QTOTAL = " << mois_sl << '\n'; }
 #ifdef ERF_ENABLE_FIRE
-           if (m_fire_coupler) { Print() << " RHO SMOKE  = " << smoke_sl << '\n'; }
+           if (fire_model.HasModel()) { Print() << " RHO SMOKE  = " << smoke_sl << '\n'; }
 #endif
         } else {
 #if 1
@@ -159,7 +159,7 @@ ERF::sum_integrated_quantities (double time)
            if (solverChoice.transport_scalar) { Print() << " RHO SCALAR SL/ML = " << scal_sl << " " << scal_ml << '\n'; }
            if (solverChoice.moisture_type != MoistureType::None) { Print() << " RHO QTOTAL SL/ML = " << mois_sl << " " << mois_ml << '\n'; }
 #ifdef ERF_ENABLE_FIRE
-           if (m_fire_coupler) { Print() << " RHO SMOKE  SL/ML = " << smoke_sl << " " << smoke_ml << '\n'; }
+           if (fire_model.HasModel()) { Print() << " RHO SMOKE  SL/ML = " << smoke_sl << " " << smoke_ml << '\n'; }
 #endif
         }
 

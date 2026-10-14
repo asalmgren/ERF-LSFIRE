@@ -3286,18 +3286,20 @@ add_test_abort(TerrainStress_Abort_MetricAnelasticMidPoint ${_tsr_dir} Terrain_S
 endif()
 endif()
 
-# The fire coupling (ERF_ENABLE_FIRE): erf.fire.enable needs a fire engine built
-# in (none is in this repository), the coupling inputs stop the run naming the
-# key, and a build without the coupling refuses a fire deck instead of running
-# it as plain ERF. The checks run in the constructor, so any deck serves.
+# The fire model container (ERF_ENABLE_FIRE): erf.fire_model selects the model
+# (only None is built into this repository), the keys that selected the fire
+# before it (erf.fire.enable, erf.fire.engine) stop the run, the coupling inputs
+# stop the run naming the key, and a build without the coupling refuses a fire
+# deck instead of running it as plain ERF. The checks run in the constructor,
+# so any deck serves.
 if(ERF_ENABLE_MPI AND NOT WIN32)
 set(_fire_abort_dir ${CMAKE_CURRENT_SOURCE_DIR}/test_files/Terrain_Stress_Ridge)
 if(ERF_ENABLE_FIRE)
-add_test_abort(Fire_Abort_NoEngineBuiltIn ${_fire_abort_dir} Terrain_Stress_Ridge.i
-               "erf.fire.enable = true, but this ERF has no fire engine built in"
+add_test_abort(Fire_Abort_OldEnableKey ${_fire_abort_dir} Terrain_Stress_Ridge.i
+               "erf.fire.enable is no longer read: select the fire model with erf.fire_model"
                "erf.fire.enable=true")
-add_test_abort(Fire_Abort_EngineWithoutEngines ${_fire_abort_dir} Terrain_Stress_Ridge.i
-               "erf.fire.engine is set, but this ERF has no fire engine built in"
+add_test_abort(Fire_Abort_OldEngineKey ${_fire_abort_dir} Terrain_Stress_Ridge.i
+               "erf.fire.engine is no longer read: select the fire model with erf.fire_model"
                "erf.fire.engine=native")
 add_test_abort(Fire_Abort_CouplingType ${_fire_abort_dir} Terrain_Stress_Ridge.i
                "erf.fire.coupling_type = .tight. is not one of .passive., .lagged., .synchronous."
@@ -3319,8 +3321,8 @@ add_test_abort(Fire_Abort_SmokeKeyWithoutSmoke ${_fire_abort_dir} Terrain_Stress
                "erf.fire.smoke_emission_factor=0.05")
 # ... but with the fire switched off explicitly the key only warns, and the run goes on
 add_test_abort(Fire_Warn_SmokeKeyFireOff ${_fire_abort_dir} Terrain_Stress_Ridge.i
-               "erf.fire.smoke_emission_factor is ignored with erf.fire.enable = false"
-               "erf.fire.enable=false erf.fire.smoke_emission_factor=0.05")
+               "erf.fire.smoke_emission_factor is ignored with erf.fire_model = None"
+               "erf.fire_model=None erf.fire.smoke_emission_factor=0.05")
 # A checkpoint that records no scalar layout predates the smoke scalar (one
 # passive scalar); a build with the fire coupling (two) must refuse it rather
 # than read every component after the scalars one slot off. The test writes a
@@ -3340,7 +3342,7 @@ set_tests_properties(Fire_Abort_CheckpointWithoutLayout PROPERTIES
     ATTACHED_FILES_ON_FAIL "${_fl_dir}/write.log;${_fl_dir}/Fire_Abort_CheckpointWithoutLayout.log")
 else()
 add_test_abort(Fire_Abort_BuiltWithoutFire ${_fire_abort_dir} Terrain_Stress_Ridge.i
-               "erf.fire.enable = true but this executable was built without the fire coupling"
+               "erf.fire.enable and erf.fire.engine are no longer read: the fire model is selected with erf.fire_model, and this executable was built without the fire coupling"
                "erf.fire.enable=true")
 endif()
 endif()

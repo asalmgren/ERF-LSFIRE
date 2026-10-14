@@ -1,0 +1,5 @@
+CEXE_sources += ERF_FireModel.cpp
+
+CEXE_headers += ERF_FireModel.H
+CEXE_headers += ERF_FireModelBase.H
+CEXE_headers += ERF_FireModelTemplate.H

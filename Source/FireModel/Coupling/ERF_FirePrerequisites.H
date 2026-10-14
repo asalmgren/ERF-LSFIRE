@@ -15,14 +15,14 @@ class ERF;
  * @brief Start-up checks of the atmosphere side of the fire coupling
  *
  * Verifies that ERF is configured so that a fire grid can be coupled to it,
- * whichever fire engine runs on that grid:
+ * whichever fire model runs on that grid:
  * - MOST surface layer is active with proper boundary conditions
  * - The level the fire grid refines exists and keeps its boxes
  * - No z-direction MPI decomposition (all z-levels on same rank)
  * - The level's boxes cover one rectangle
  * - Grid divisibility by refinement factor
  *
- * Each engine checks its own inputs after these (FireEngine::verify_prerequisites).
+ * Each model checks its own inputs after these (FireModelBase::Init).
  *
  * All checks use AMREX_ALWAYS_ASSERT_WITH_MESSAGE for actionable diagnostics.
  */
@@ -39,25 +39,25 @@ class ERF;
 int fire_anchor_level(int anchor_level, int finest_level);
 
 /**
- * @brief Start-up check for an engine that reads the rain of every column
- *        (FireEngine::wants_surface_precip): the microphysics scheme must
+ * @brief Start-up check for a model that reads the rain of every column
+ *        (FireInput_SurfacePrecip): the microphysics scheme must
  *        provide surface precipitation accumulators.
  *
- * Aborts, naming the engine and erf.moisture_model, when the sources are
+ * Aborts, naming the model and erf.moisture_model, when the sources are
  * empty (no moisture model, Kessler_NoRain, saturation adjustment only, ...).
  * Called after the microphysics of the fire grid's level is initialised.
  *
- * @param[in] engine_name  The engine's name (FireEngine::name)
+ * @param[in] model_name   The model's name (FireModelBase::Name)
  * @param[in] sources      Microphysics::Get_Surface_Precip_Accumulation_Ptrs(lev)
  */
-void verify_fire_precip_source(const std::string& engine_name,
+void verify_fire_precip_source(const std::string& model_name,
                                const SurfacePrecipAccumulationSources& sources);
 
 /**
  * @brief Verify the ERF configuration the fire coupling needs
  *
- * Called once at startup from FireCoupler::initialize() after the SurfaceLayer
- * is ready, before the engine's own checks. Aborts with clear diagnostic
+ * Called once at startup from FireModel::Init() after the SurfaceLayer
+ * is ready, before the model's own checks. Aborts with clear diagnostic
  * messages if any requirement is not met.
  *
  * @param[in] erf              ERF instance (for grids, dmap, Geom access)

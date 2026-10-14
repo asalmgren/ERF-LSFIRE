@@ -795,10 +795,10 @@ ERF::WriteCheckpointFile () const
     } // for lev
 
 #ifdef ERF_ENABLE_FIRE
-    // The fire: the engine's state (FireEngine::write_checkpoint), then the
+    // The fire: the model's state (FireModelBase::WriteCheckpoint), then the
     // coupling's lagged fluxes, on the level the fire grid refines
-    if (m_fire_coupler) {
-        m_fire_coupler->write_checkpoint(checkpointname);
+    if (fire_model.HasModel()) {
+        fire_model.WriteCheckpoint(checkpointname);
     }
 #endif
 
@@ -1284,7 +1284,7 @@ ERF::ReadCheckpointFile ()
         // Refused whichever level the fire grid is on: only level 0 is re-made,
         // but no restart of a fire on a finer level with level 0 re-made has
         // been tested.
-        if (m_fire_coupler) {
+        if (fire_model.HasModel()) {
             unsupported.push_back("the fire model (its fire grid is built from the run's level "
                                   "boxes and its state is still read onto them; refused whichever "
                                   "level the fire grid is on)");

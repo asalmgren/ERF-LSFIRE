@@ -1,0 +1,3 @@
+CEXE_sources += ERF_FireSmoke.cpp
+
+CEXE_headers += ERF_FireSmoke.H

@@ -1,7 +1,7 @@
 #include "ERF_SrcHeaders.H"
 
 #ifdef ERF_ENABLE_FIRE
-#include <ERF_FireCoupler.H>
+#include <ERF_FireModel.H>
 #endif
 
 /**
@@ -136,22 +136,24 @@
 
         // *****************************************************************************
         // Inject the fire-to-atmosphere heat flux AFTER make_sources, which resets
-        // cc_src at every RK stage. The lagged fire flux (FireCoupler) is constant
+        // cc_src at every RK stage. The lagged fire flux (FireModel) is constant
         // across all RK stages and must be added here to survive the integrator.
         // *****************************************************************************
 #ifdef ERF_ENABLE_FIRE
         // on the level the fire grid refines; coarser levels get it by average-down.
         // The heat and vapour with the WRF-Fire profile, then the smoke tracer,
-        // proportional to the fuel burnt (FireCoupler::add_sources).
-        if (m_fire_coupler && level == m_fire_coupler->level()) {
+        // proportional to the fuel burnt (FireModel::AddSources; a no-op on the
+        // levels without the fire grid).
+        if (fire_model.HasModel()) {
             bool has_moisture = (solverChoice.moisture_type != MoistureType::None);
-            m_fire_coupler->add_sources(cc_src,
-                                        S_old[IntVars::cons],
-                                        *zpc_to_use,
-                                        zpn_to_use,
-                                        fine_geom,
-                                        has_moisture,
-                                        istep[level]);
+            fire_model.AddSources(level,
+                                  cc_src,
+                                  S_old[IntVars::cons],
+                                  *zpc_to_use,
+                                  zpn_to_use,
+                                  fine_geom,
+                                  has_moisture,
+                                  istep[level]);
         }
 #endif
 

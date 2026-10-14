@@ -484,19 +484,19 @@ ERF::Advance (int lev, double time, double dt_lev, int iteration, int /*ncycle*/
 
 #ifdef ERF_ENABLE_FIRE
     // Advance the fire on the level its grid refines (erf.fire.anchor_level).
-    // The coupler hands the engine the wind (before the dycore with passive and
-    // lagged coupling, after it with synchronous), the air temperature and
-    // humidity at k = 0 from the state before the dycore and, when the engine
-    // asks for it, the surface precipitation accumulated through this step's
-    // microphysics; it then holds the engine's fluxes for the next step.
-    if (m_fire_coupler && lev == m_fire_coupler->level()) {
+    // The container hands the model the wind (before the dycore with passive
+    // and lagged coupling, after it with synchronous) and, when the model asks
+    // for them, the air temperature and humidity at k = 0 from the state
+    // before the dycore and the surface precipitation accumulated through this
+    // step's microphysics; it then holds the model's fluxes for the next step.
+    if (fire_model.HasModel() && lev == fire_model.Level()) {
         const SurfacePrecipAccumulationSources precip_sources =
             micro ? micro->Get_Surface_Precip_Accumulation_Ptrs(lev)
                   : SurfacePrecipAccumulationSources{};
-        m_fire_coupler->advance(time, dt_lev, S_old,
-                                vars_old[lev][Vars::xvel], vars_old[lev][Vars::yvel],
-                                vars_new[lev][Vars::xvel], vars_new[lev][Vars::yvel],
-                                *z_phys_cc[lev], ba2d[lev], Geom(lev), precip_sources);
+        fire_model.Advance(lev, time, dt_lev, S_old,
+                           vars_old[lev][Vars::xvel], vars_old[lev][Vars::yvel], vars_old[lev][Vars::zvel],
+                           vars_new[lev][Vars::xvel], vars_new[lev][Vars::yvel], vars_new[lev][Vars::zvel],
+                           *z_phys_cc[lev], ba2d[lev], Geom(lev), precip_sources);
     }
 #endif
 

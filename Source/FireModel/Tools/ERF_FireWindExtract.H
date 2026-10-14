@@ -12,11 +12,11 @@
  *
  * The atmosphere side of the fire coupling: the wind of the atmospheric
  * columns at a height above ground (a uniform height, or one per fire cell
- * that the fire engine supplies), interpolated linearly in height and
+ * that the fire model supplies), interpolated linearly in height and
  * bilinearly or nearest between the surrounding columns, with an optional
  * two-height log-law resampling; no MOST reconstruction is involved. A fire
- * engine may read its wind through it. What the engine does with the wind
- * afterwards (wind adjustment factors, terrain corrections) is the engine's.
+ * model may read its wind through it. What the model does with the wind
+ * afterwards (wind adjustment factors, terrain corrections) is the model's.
  */
 
 
@@ -86,7 +86,7 @@
  * columns are all closed keeps the plain weights; it is inside a footprint
  * and masked anyway.
  *
- * With z_sample > 0 (an engine input) every column is sampled at
+ * With z_sample > 0 (a model input) every column is sampled at
  * z_sample above its ground instead of at the target height, and the result
  * is brought down to the target height with a neutral log profile of
  * roughness z0_log: U(z_ref) = U(z_sample) ln(z_ref / z0) / ln(z_sample / z0).

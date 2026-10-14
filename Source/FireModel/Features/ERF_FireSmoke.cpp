@@ -1,4 +1,4 @@
-#include <ERF_FireSmokeEmission.H>
+#include <ERF_FireSmoke.H>
 
 #ifdef ERF_ENABLE_FIRE
 

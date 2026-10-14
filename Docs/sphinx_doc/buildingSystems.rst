@@ -188,7 +188,7 @@ Set build variables in the ``GNUmakefile``:
         - FALSE
         - TRUE/FALSE
       * - ``USE_FIRE``
-        - Enables the fire coupling (atmosphere side; fire engines plug into it, see :ref:`sec:FireCoupling`)
+        - Enables the fire model container and its coupling to the atmosphere (fire models plug into it, see :ref:`sec:FireCoupling`)
         - FALSE
         - TRUE/FALSE
       * - ``USE_NOAHMP``
@@ -565,7 +565,7 @@ CMake can also generate makefiles for the Ninja build system for faster compilat
      - OFF
      - ON/OFF
    * - ``ERF_ENABLE_FIRE``
-     - Enables the fire coupling (atmosphere side; fire engines plug into it, see :ref:`sec:FireCoupling`); adds the smoke scalar to the state
+     - Enables the fire model container and its coupling to the atmosphere (fire models plug into it, see :ref:`sec:FireCoupling`); adds the smoke scalar to the state
      - OFF
      - ON/OFF
    * - ``ERF_PRECISION``

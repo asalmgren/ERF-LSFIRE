@@ -166,6 +166,14 @@ AMREX_ENUM(LandSurfaceType,
 );
 
 /**
+ * @brief Fire model (erf.fire_model); a model other than None needs the fire
+ *        coupling (ERF_ENABLE_FIRE) and the model built in.
+ */
+AMREX_ENUM(FireType,
+    None
+);
+
+/**
  * @brief Urban model.
  */
 AMREX_ENUM(UrbanType,
@@ -817,6 +825,10 @@ struct SolverChoice {
         // What type of land surface model to use
         lsm_type = LandSurfaceType::None; // Default
         pp.query_enum_case_insensitive("land_surface_model",lsm_type);
+
+        // What type of fire model to use (the coupling's own keys are erf.fire.*)
+        fire_type = FireType::None; // Default
+        pp.query_enum_case_insensitive("fire_model", fire_type);
 
         // What type of urban model to use and whether it is active at the given level
         urban_type = UrbanType::None;
@@ -2120,6 +2132,10 @@ struct SolverChoice {
             amrex::Print() << "Radiation Model: None" << std::endl;
         }
 
+        if (fire_type != FireType::None) {
+            amrex::Print() << "Fire Model: " << amrex::getEnumNameString(fire_type) << std::endl;
+        }
+
         amrex::Print() << "Gradp_type                  : " << gradp_type << std::endl;
 
         for (int lev = 0; lev <= max_level; lev++) {
@@ -2533,6 +2549,7 @@ struct SolverChoice {
     WindFarmType windfarm_type;
     WindFarmLocType windfarm_loc_type;
     LandSurfaceType lsm_type;
+    FireType fire_type = FireType::None;
     UrbanType urban_type;
     amrex::Vector<int> urban_enabled_lev;
     RadiationType rad_type;
@@ -2851,6 +2868,8 @@ struct SolverChoice {
  * @brief Coordinate system for wind-farm turbine locations.
  * @var SolverChoice::lsm_type
  * @brief Land-surface model.
+ * @var SolverChoice::fire_type
+ * @brief Fire model.
  * @var SolverChoice::rad_type
  * @brief Radiation model.
  * @var SolverChoice::abl_driver_type
